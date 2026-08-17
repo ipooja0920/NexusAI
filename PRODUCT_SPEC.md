@@ -37,7 +37,7 @@ drop** workflow:
 |---|---|
 | One screening file per professor, prepared manually | Capital IQ work repeated for every request |
 | Everything recomputed per run (geocoding, parsing) | ~1 sec/address geocoding on every single run |
-| Company name only sent to the LLM | Small/private companies judged on model memory, often "NA" |
+| Only the company's *name* was sent to the AI | The AI could judge a company only if it already "knew" it from training. Small/private companies it had never heard of got "NA" (no score) and sank in the rankings — even when they were actually good fits. See §3.4 |
 | Hardcoded OS paths (separate Mac/Windows script versions) | Code forked into "SixthTake"/"SeventhTake" variants |
 | Results written into scattered template columns (O/P … DO/DR) | Fragile magic-column code; outputs hard to read |
 | Credentials hardcoded in watcher scripts | Security exposure |
