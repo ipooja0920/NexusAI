@@ -1,0 +1,11 @@
+# Secrets - never commit
+.env
+
+# Data stays local (licensed / internal) - only code goes to GitHub
+data/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+.DS_Store

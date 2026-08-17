@@ -1,0 +1,172 @@
+# NexusAI — Product Specification
+
+**Faculty ↔ Industry Matching Pipeline, v2 architecture**
+*University of Connecticut · August 2026*
+
+---
+
+## 1. Purpose
+
+NexusAI identifies companies that are strong candidates for research
+partnerships with UConn faculty. Given a faculty member's research profile
+and a Capital IQ company universe, it produces a ranked, explained top-20
+list of companies per faculty member — scored on research alignment,
+partnership propensity, funding capacity, proximity, and company size.
+
+## 2. Background: the existing (v1) architecture
+
+The first-generation system was built around a **per-professor screening
+drop** workflow:
+
+1. A staff member manually ran a Capital IQ screen for one professor and
+   saved the result (companies + the professor's criteria paragraph in
+   cell C1) into a SharePoint **DropFolder** synced via OneDrive.
+2. A **watcher script** (`WatcherProgram.py`) running on a dedicated
+   machine detected the file, emailed status notifications, and launched
+   the processing program (`ProgramTesting9.py`) as a subprocess.
+3. `ProgramTesting9.py` geocoded every address, scored every company
+   against the criteria paragraph via OpenAI (1–9 rubric), selected a
+   top 40 for secondary partnership/funding scoring, computed a
+   6-component weighted score, and wrote results into a copy of a
+   formatting template (`Final_Company_Score_Generator_Copy.xlsx`),
+   plus an optional PowerPoint for the top 10.
+
+### v1 pain points
+
+| Issue | Consequence |
+|---|---|
+| One screening file per professor, prepared manually | Capital IQ work repeated for every request |
+| Everything recomputed per run (geocoding, parsing) | ~1 sec/address geocoding on every single run |
+| Company name only sent to the LLM | Small/private companies judged on model memory, often "NA" |
+| Hardcoded OS paths (separate Mac/Windows script versions) | Code forked into "SixthTake"/"SeventhTake" variants |
+| Results written into scattered template columns (O/P … DO/DR) | Fragile magic-column code; outputs hard to read |
+| Credentials hardcoded in watcher scripts | Security exposure |
+| No record of which professors had been processed | Manual tracking |
+
+## 3. The v2 architecture
+
+v2 inverts the data flow: instead of one screening file per professor,
+there is **one static company datasource** (Capital IQ extract for CT/MA/RI,
+refreshed occasionally) and a **Faculty Database** (one row per professor
+with a `Flag` column: `N` = not yet matched, `Y` = matched). The system
+matches every flagged professor against the shared universe.
+
+### Guiding principle
+
+> **Never pay twice for work that doesn't change between runs.**
+
+Everything that depends only on the *company* is computed once and cached.
+Only work that depends on the *specific professor* runs per matching.
+
+### 3.1 Stage 0 — Datasource enrichment (`enrich_companies.py`)
+
+Run once per datasource refresh. For every company:
+
+- Clean the Capital IQ "Offices" block → geocode (Nominatim, ArcGIS
+  fallback) → distance from UConn Storrs (41.8073, −72.2536)
+- Parse revenue ($USDmm) and employee counts → deterministic component
+  scores
+- Compute an **embedding** of the business description (used by the
+  pre-filter)
+
+Outputs `data/companies_enriched.xlsx`. Geocodes and embeddings persist in
+JSON caches (`data/cache/`), so a datasource refresh only pays for new or
+changed companies; failures are cached too so bad addresses aren't
+retried forever.
+
+### 3.2 Stage 1 — Matching run (`match_faculty.py`)
+
+For each faculty row with `Flag = N`:
+
+| Step | What happens | Why |
+|---|---|---|
+| Build research profile | Research Description + Department + Industry Classifications | Richer context than v1's bare criteria paragraph |
+| **Embedding pre-filter** | Rank all companies by cosine similarity to the profile; keep top 300 (configurable) | Cuts thousands of companies to a relevant pool for ~1 API call; v1 had no equivalent because its input was pre-screened |
+| Alignment scoring | v1's 1–9 rubric prompt, **now including the company's business description** | Small companies judged on what they do, not on model memory of their name |
+| Funnel to top 40 | Preliminary score from distance/employees/revenue/alignment | Secondary scoring spent only where it can affect the top 20 |
+| Partnership + funding scoring | Same prompts as v1, but results are **cached across faculty** (faculty-independent) | "Does company X fund academic research?" has the same answer for every professor — pay once |
+| Final weighted score | 0.25 distance + 0.05 employees + 0.15 revenue + 0.30 alignment + 0.15 partnership + 0.10 funding | Same weights as v1; all configurable |
+| Output | Clean self-contained workbook: ranked top 20, all scores + reasons, plus a **Run Info** sheet (profile, model, weights, date) | Replaces v1's template-column writing; every output is traceable |
+| Flag flip | `N → Y` in the Faculty Database | Idempotence + crash recovery + zero extra bookkeeping |
+
+### 3.3 What deliberately carried over from v1
+
+- The alignment / partnership / funding **prompt rubrics** (proven)
+- Address cleaning and geocoding chain (Nominatim → ArcGIS)
+- Component score formulas: `exp(−miles/400)` distance decay, employee
+  cap at 1,000, revenue band (1.0 between $30–60mm → 0 at $1B, missing → 0.5)
+- The 40 → 20 funnel shape and the 6-component weighting
+
+### 3.4 Architecture comparison at a glance
+
+| | v1 (Watcher + ProgramTesting9) | v2 (NexusAI matching) |
+|---|---|---|
+| Input model | One screening file per professor, dropped manually | Static company universe + faculty database with flags |
+| Trigger | File-system watcher on a dedicated machine | CLI run (watcher/UI can wrap it later) |
+| Geocoding | Every company, every run | Once per company, cached forever |
+| Candidate selection | None (input pre-screened, ~60 companies) | Embedding pre-filter over thousands of companies |
+| LLM context | Company name only | Name + business description |
+| Secondary scores | Recomputed every run | Cached across all faculty runs |
+| Output | Template copy with scattered columns (+ PPT) | Clean per-faculty workbook + Run Info sheet |
+| State tracking | None | Flag column (resume-safe, idempotent) |
+| Configuration | Hardcoded constants, per-OS code forks | Single `config.yaml`, cross-platform (pathlib) |
+| Secrets | Hardcoded in source | `.env`, git-ignored |
+| Cost per professor | ~60 geocodes + ~140 LLM calls, all fresh | ~1 embedding + ≤300 alignment calls + cached secondaries; shrinks over time |
+
+## 4. Repository layout
+
+```
+NexusAI/
+├── config.yaml              # all paths, weights, cutoffs, models
+├── requirements.txt         # pinned dependencies (Python 3.10+)
+├── .env.example             # template for OPENAI_API_KEY (real .env git-ignored)
+├── enrich_companies.py      # Stage 0 CLI
+├── match_faculty.py         # Stage 1 CLI (--dry-run, --faculty "Name")
+├── test_smoke.py            # offline end-to-end test with mocked AI
+├── nexus/                   # importable core (future Streamlit UI reuses this)
+│   ├── settings.py          # config loader
+│   ├── cache.py             # persistent JSON caches
+│   ├── geo.py               # address cleaning, geocoding, distance
+│   ├── scoring.py           # prompts, parsing, component score math
+│   ├── prefilter.py         # embeddings + cosine ranking
+│   └── excel_io.py          # all Excel read/write
+└── data/                    # git-ignored: datasource, faculty DB, caches, outputs
+```
+
+`data/` never reaches GitHub: Capital IQ extracts are licensed and the
+faculty list is internal. Only code and config templates are published.
+
+## 5. Scoring model reference
+
+- **Alignment (30%)** — LLM, 1–9 rubric against the research profile,
+  min–max normalized across the candidate pool
+- **Distance (25%)** — `exp(−miles/400)`; unknown address → 0
+- **Partnership (15%)** — LLM, 1–9, normalized within the top 40
+- **Revenue (15%)** — band score: 1.0 in $30–60mm, → 0 at $1B, 0.5 if missing
+  *(encodes a deliberate preference for reachable mid-size partners; tunable)*
+- **Funding (10%)** — LLM, 1–9, normalized within the top 40
+- **Employees (5%)** — `min(1, employees/1000)`
+
+All weights and thresholds are `config.yaml` values.
+
+## 6. Known limitations
+
+- LLM scores rely on a single `gpt-5-nano` call without web search;
+  obscure companies may score "NA" (excluded from normalization, never
+  falsely boosted).
+- The embedding pre-filter is the one lossy step: a match invisible in a
+  company's description could be dropped before LLM scoring. Mitigated by
+  a generous cutoff (300) that is configurable up to "score everything".
+- Nominatim geocoding is rate-limited (~1/sec); the first enrichment of a
+  large datasource takes hours (once).
+- Faculty Database writes fail if the file is open in Excel; the program
+  reports this clearly and the flag system makes re-running safe.
+
+## 7. Roadmap
+
+1. **Now** — CLI on a single Mac; one faculty at a time or batch by flag
+2. **Next** — datasource expansion (NY); revisit revenue-band policy after
+   reviewing first real outputs; optional PPT export if wanted
+3. **Later** — dedicated Windows machine or per-user installs (code is
+   already cross-platform); Streamlit UI wrapping the `nexus/` modules;
+   optional watcher integration for drop-folder automation
