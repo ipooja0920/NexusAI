@@ -130,7 +130,62 @@ narrow. The cutoff is a config value that can be raised — or set to 0 to
 score the entire datasource. With fewer companies than the cutoff (e.g. a
 61-company test file), the pre-filter simply doesn't activate.
 
-### 3.4 What deliberately carried over from v1
+### 3.4 The "NA problem": how v2 scores small companies
+
+v1 asked the LLM to judge companies from their **name alone**, which meant
+the model could only draw on whatever it happened to remember from its
+training data. Small and private companies — the majority of a regional
+Capital IQ extract — failed this name-recognition test and were stamped
+"NA", sinking them in the rankings regardless of actual fit. v2 fixes this
+by including the Capital IQ business description in every scoring prompt.
+
+#### What the AI is given
+
+| | v1 (Testing9) | v2 (ours) |
+|---|---|---|
+| What the AI receives | Professor's criteria + **company name only** | Professor's criteria + company name + **what the company does** (from Capital IQ) |
+| Where the AI gets company info | Its memory only — whatever it learned during training | Its memory **+** the description we hand it in the prompt |
+| Famous company (e.g. BASF) | Works fine — AI remembers it | Works fine — same (memory still contributes fully) |
+| Small company (e.g. 25-person NJ chemical firm) | AI has never heard of it → forced to answer "NA" | AI reads the description → gives a real score with a reason |
+
+#### A concrete example — same company, both prompts
+
+**v1 asks:**
+> "How well does *Cerion Technology, Inc.* align with this research?"
+
+The AI thinks: *"Cerion who? Never heard of them. Rule says answer NA."*
+→ **NA, alignment counts as 0**
+
+**v2 asks:**
+> "How well does *Cerion Technology, Inc. — a nanomaterials manufacturer
+> focused on catalysis and coatings — align with this research?"*
+
+The AI thinks: *"Nanomaterials for catalysis, and the professor works on
+catalysts — strong fit."* → **8 out of 9, with a written reason**
+
+Note that a high alignment score does not decide the ranking by itself:
+alignment is 30% of the overall score, and 45% of the score is pure
+arithmetic (distance, revenue, size) that no description can influence.
+In test runs, Cerion's 8/9 alignment — the highest in the pool — still
+ranked it only 7th overall because of its distance from Storrs.
+
+#### When does "NA" still happen?
+
+| Situation | v1 | v2 |
+|---|---|---|
+| Company is small but Capital IQ describes it | **NA** (AI doesn't recognize the name) | Real score (AI reads the description) |
+| Capital IQ has no description either (just "-") | NA | NA — *correctly*, since there's truly nothing to judge |
+| AI returns something malformed/broken | NA | NA (kept as a safety net) |
+| What NA costs the company | Alignment counts as 0 → sinks in ranking | Same — but now it only happens to genuinely unknowable companies |
+
+The NA escape hatch, strict JSON parsing, and NA → 0 normalization are
+deliberately retained from v1: when there is genuinely nothing to judge,
+an honest NA that sinks in the ranking is safer than a hallucinated score.
+The difference is that NA is now the exception (blank-description rows)
+rather than the default outcome for every company the model hadn't
+memorized.
+
+### 3.5 What deliberately carried over from v1
 
 - The alignment / partnership / funding **prompt rubrics** (proven)
 - Address cleaning and geocoding chain (Nominatim → ArcGIS)
@@ -138,7 +193,7 @@ score the entire datasource. With fewer companies than the cutoff (e.g. a
   cap at 1,000, revenue band (1.0 between $30–60mm → 0 at $1B, missing → 0.5)
 - The 40 → 20 funnel shape and the 6-component weighting
 
-### 3.5 Architecture comparison at a glance
+### 3.6 Architecture comparison at a glance
 
 | | v1 (Watcher + ProgramTesting9) | v2 (NexusAI matching) |
 |---|---|---|
