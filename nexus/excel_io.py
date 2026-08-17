@@ -167,8 +167,24 @@ COL_WIDTHS = {
 }
 
 
+ALL_HEADERS = [
+    "Stage", "Rank", "Company", "Website", "Distance (mi)", "Employees",
+    "Revenue ($USDmm)", "Distance Score", "Employee Score", "Revenue Score",
+    "Alignment Score (1-9)", "Alignment Reason",
+    "Partnership Score (1-9)", "Partnership Reason",
+    "Funding Score (1-9)", "Funding Reason",
+    "Overall Score", "Company Description",
+]
+
+ALL_COL_WIDTHS = {
+    "A": 22, "B": 6, "C": 32, "D": 26, "E": 12, "F": 11, "G": 16,
+    "H": 13, "I": 13, "J": 13, "K": 12, "L": 45, "M": 12, "N": 45,
+    "O": 12, "P": 45, "Q": 12, "R": 60,
+}
+
+
 def write_faculty_output(path: Path, faculty: dict, results: List[dict],
-                         run_info: dict) -> None:
+                         run_info: dict, all_rows: Optional[List[dict]] = None) -> None:
     wb = openpyxl.Workbook()
 
     # ---- Results sheet ----
@@ -198,6 +214,34 @@ def write_faculty_output(path: Path, faculty: dict, results: List[dict],
         for cell in row:
             cell.alignment = Alignment(vertical="top", wrap_text=True)
     ws.freeze_panes = "C2"
+
+    # ---- All Companies sheet (full funnel visibility, v1-style) ----
+    if all_rows:
+        wa = wb.create_sheet("All Companies")
+        wa.append(ALL_HEADERS)
+        for cell in wa[1]:
+            cell.fill = HEADER_FILL
+            cell.font = HEADER_FONT
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+        for r in all_rows:
+            def _r4(v):
+                return round(v, 4) if isinstance(v, (int, float)) else v
+            wa.append([
+                r.get("stage"), r.get("rank"), r["company"], r.get("website"),
+                r.get("distance_miles"), r.get("employees"), r.get("revenue_usdmm"),
+                _r4(r.get("distance_score")), _r4(r.get("employee_score")),
+                _r4(r.get("revenue_score")),
+                r.get("alignment_score"), r.get("alignment_reason"),
+                r.get("partnership_score"), r.get("partnership_reason"),
+                r.get("funding_score"), r.get("funding_reason"),
+                _r4(r.get("overall_score")), r.get("description"),
+            ])
+        for letter, width in ALL_COL_WIDTHS.items():
+            wa.column_dimensions[letter].width = width
+        for row in wa.iter_rows(min_row=2):
+            for cell in row:
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+        wa.freeze_panes = "D2"
 
     # ---- Run Info sheet (traceability) ----
     info = wb.create_sheet("Run Info")

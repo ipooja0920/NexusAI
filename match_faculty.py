@@ -199,6 +199,50 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches,
             "description": c.get("description"),
         })
 
+    # ---------- All-companies rows (full funnel visibility) ----------
+    rank_of = {gi: rank for rank, gi in enumerate(final_ranked, start=1)}
+
+    def stage_of(gi: int) -> str:
+        if gi in rank_of:
+            return f"Top {final_n}"
+        if gi in secondary:
+            return f"Secondary scored (top {cutoff})"
+        if gi in align:
+            return "Alignment scored"
+        return "Filtered out (pre-filter)"
+
+    def sort_key(gi: int):
+        if gi in rank_of:
+            return (0, rank_of[gi])
+        if gi in align:
+            return (1, -prelim[gi])
+        return (2, gi)
+
+    all_rows = []
+    for gi in sorted(range(n_companies), key=sort_key):
+        c = companies[gi]
+        sec = secondary.get(gi)
+        all_rows.append({
+            "stage": stage_of(gi),
+            "rank": rank_of.get(gi),
+            "company": c["company"],
+            "website": c.get("website"),
+            "distance_miles": c.get("distance_miles"),
+            "employees": c.get("employees"),
+            "revenue_usdmm": c.get("revenue_usdmm"),
+            "distance_score": c["distance_score"],
+            "employee_score": c["employee_score"],
+            "revenue_score": c["revenue_score"],
+            "alignment_score": align[gi]["score"] if gi in align else None,
+            "alignment_reason": align[gi]["reason"] if gi in align else None,
+            "partnership_score": sec["partnership"]["score"] if sec else None,
+            "partnership_reason": sec["partnership"]["reason"] if sec else None,
+            "funding_score": sec["funding"]["score"] if sec else None,
+            "funding_reason": sec["funding"]["reason"] if sec else None,
+            "overall_score": overall.get(gi),
+            "description": c.get("description"),
+        })
+
     run_info = {
         "research_profile": profile,
         "scoring_model": model,
@@ -210,7 +254,7 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches,
     }
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_path = cfg.output_dir / f"{safe_filename(fac['name'])} Match {stamp}.xlsx"
-    write_faculty_output(out_path, fac, results, run_info)
+    write_faculty_output(out_path, fac, results, run_info, all_rows=all_rows)
     print(f"  [output] {out_path}")
     return str(out_path)
 

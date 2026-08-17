@@ -86,10 +86,51 @@ For each faculty row with `Flag = N`:
 | Funnel to top 40 | Preliminary score from distance/employees/revenue/alignment | Secondary scoring spent only where it can affect the top 20 |
 | Partnership + funding scoring | Same prompts as v1, but results are **cached across faculty** (faculty-independent) | "Does company X fund academic research?" has the same answer for every professor — pay once |
 | Final weighted score | 0.25 distance + 0.05 employees + 0.15 revenue + 0.30 alignment + 0.15 partnership + 0.10 funding | Same weights as v1; all configurable |
-| Output | Clean self-contained workbook: ranked top 20, all scores + reasons, plus a **Run Info** sheet (profile, model, weights, date) | Replaces v1's template-column writing; every output is traceable |
+| Output | Clean self-contained workbook: a ranked **Top Matches** sheet, an **All Companies** sheet showing every company's scores and the funnel stage it reached (Top 20 / secondary scored / alignment scored / pre-filtered out), plus a **Run Info** sheet (profile, model, weights, date) | Keeps v1's full-list visibility but adds the rank, overall score, and stage labels v1 never wrote to the file |
 | Flag flip | `N → Y` in the Faculty Database | Idempotence + crash recovery + zero extra bookkeeping |
 
-### 3.3 What deliberately carried over from v1
+### 3.3 The embedding pre-filter: how cosine similarity works
+
+The pre-filter is the one genuinely new mechanism in v2, so it deserves a
+plain-language explanation.
+
+An **embedding** converts a piece of text into a long list of numbers
+(1,536 of them with `text-embedding-3-small`) — coordinates that place the
+text's *meaning* as a point in a high-dimensional space. Texts about
+similar things land near each other: "zeolite catalysis" and "fuel
+upgrading catalysts" end up close together; "zeolite catalysis" and
+"dental insurance" end up far apart.
+
+**Cosine similarity** measures how closely two of these points point in
+the same direction: 1.0 means essentially the same meaning, near 0 means
+unrelated. Ranking every company by the cosine similarity between its
+description embedding and the faculty profile embedding gives a
+"most semantically relevant first" ordering of the entire datasource —
+computed in a fraction of a second, with no LLM calls.
+
+Why this approach instead of keyword or industry-classification filtering:
+keywords are brittle. A catalysis professor's best match might describe
+itself as "process technology" or "fuel upgrading" without ever using the
+word "catalysis," and a keyword filter would silently drop it. Embeddings
+capture semantic closeness — "pyrolysis" lands near "thermochemical
+conversion" in vector space even with zero shared words. Classification
+keyword filtering remains available as an optional extra layer, not the
+primary mechanism.
+
+Cost and storage: company embeddings are computed once in Stage 0 and
+cached permanently (keyed by a hash of the description text, so an edited
+description automatically re-embeds). Each faculty run costs exactly one
+additional embedding call for the profile. The similarity ranking itself
+is recomputed in memory each run — it is too cheap to be worth storing.
+
+The pre-filter is deliberately **generous** (top 300 by default) because
+it is the funnel's only lossy step: anything it drops can never be
+recovered downstream. Cheap steps should over-include; expensive steps
+narrow. The cutoff is a config value that can be raised — or set to 0 to
+score the entire datasource. With fewer companies than the cutoff (e.g. a
+61-company test file), the pre-filter simply doesn't activate.
+
+### 3.4 What deliberately carried over from v1
 
 - The alignment / partnership / funding **prompt rubrics** (proven)
 - Address cleaning and geocoding chain (Nominatim → ArcGIS)
@@ -97,7 +138,7 @@ For each faculty row with `Flag = N`:
   cap at 1,000, revenue band (1.0 between $30–60mm → 0 at $1B, missing → 0.5)
 - The 40 → 20 funnel shape and the 6-component weighting
 
-### 3.4 Architecture comparison at a glance
+### 3.5 Architecture comparison at a glance
 
 | | v1 (Watcher + ProgramTesting9) | v2 (NexusAI matching) |
 |---|---|---|
@@ -135,6 +176,25 @@ NexusAI/
 
 `data/` never reaches GitHub: Capital IQ extracts are licensed and the
 faculty list is internal. Only code and config templates are published.
+
+### 4.1 Data file lifecycle
+
+Each file under `data/` has a different update behavior — knowing which is
+which prevents surprises:
+
+| File | Written by | Behavior |
+|---|---|---|
+| `companies_raw.xlsx` | **You** (Capital IQ extract) | Never touched by the programs — read-only input. Changes only when you replace it with a refreshed extract. |
+| `companies_enriched.xlsx` | `enrich_companies.py` | **Rebuilt and overwritten on every enrichment run.** It is purely derived data, so the current raw file is always its single source of truth. Nothing of value is lost by overwriting — the expensive ingredients live in the caches. |
+| `cache/*.json` (geocodes, embeddings, company scores) | Both programs | **Append-only** — entries are added, never replaced. This is what makes re-runs and datasource refreshes cheap. |
+| `Faculty Database.xlsx` | You + `match_faculty.py` | You add/edit rows; the program writes only the Flag cell (`N → Y`) after a successful match. |
+| `output/*.xlsx` | `match_faculty.py` | **Never overwritten** — every run creates a new timestamped file. |
+
+When to run what: `enrich_companies.py` is needed **only when
+`companies_raw.xlsx` changes**. The day-to-day loop is just
+`match_faculty.py`. Running enrichment by accident with an unchanged
+datasource is harmless — it rebuilds the enriched file identically in
+seconds, entirely from cache, with zero API spend.
 
 ## 5. Scoring model reference
 
