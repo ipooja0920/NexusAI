@@ -20,7 +20,7 @@ from datetime import datetime
 
 from nexus.cache import Caches
 from nexus.excel_io import (read_enriched, read_faculty, set_faculty_flag,
-                            write_faculty_output)
+                            unique_path, write_faculty_output)
 from nexus.prefilter import embed_text, rank_by_similarity, select_candidates
 from nexus.scoring import (FUNDING_SYSTEM_PROMPT, PARTNERSHIP_SYSTEM_PROMPT,
                            normalize, score_alignment, score_secondary)
@@ -253,7 +253,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches,
         "weights": w,
     }
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = cfg.output_dir / f"{safe_filename(fac['name'])} Match {stamp}.xlsx"
+    out_path = unique_path(
+        cfg.output_dir / f"{safe_filename(fac['name'])} Match {stamp}.xlsx")
     write_faculty_output(out_path, fac, results, run_info, all_rows=all_rows)
     print(f"  [output] {out_path}")
     return str(out_path)

@@ -12,12 +12,20 @@ CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 
 
 class Settings:
-    def __init__(self, config_path: Path = CONFIG_PATH):
+    def __init__(self, config_path=None):
+        # Resolved at call time (not import time) so the config location can
+        # be redirected -- by tests, or via the NEXUSAI_CONFIG env var when
+        # running the same code against a different project folder.
+        if config_path is None:
+            env_path = os.getenv("NEXUSAI_CONFIG", "").strip()
+            config_path = Path(env_path) if env_path else CONFIG_PATH
+        config_path = Path(config_path)
         if not config_path.exists():
             raise FileNotFoundError(
                 f"config.yaml not found at {config_path}. "
                 "It must sit next to enrich_companies.py / match_faculty.py."
             )
+        self.config_path = config_path
         with open(config_path, "r", encoding="utf-8") as fh:
             self.raw = yaml.safe_load(fh)
 
@@ -27,7 +35,8 @@ class Settings:
     # ---------- paths ----------
     def path(self, key: str) -> Path:
         p = Path(self.raw["paths"][key])
-        return p if p.is_absolute() else PROJECT_ROOT / p
+        # Relative paths resolve against the folder holding config.yaml
+        return p if p.is_absolute() else self.config_path.parent / p
 
     @property
     def companies_raw(self) -> Path: return self.path("companies_raw")

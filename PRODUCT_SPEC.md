@@ -63,10 +63,17 @@ Run once per datasource refresh. For every company:
 
 - Clean the Capital IQ "Offices" block → geocode (Nominatim, ArcGIS
   fallback) → distance from UConn Storrs (41.8073, −72.2536)
+  — *same logic as ProgramTesting9, carried over unchanged*
 - Parse revenue ($USDmm) and employee counts → deterministic component
-  scores
-- Compute an **embedding** of the business description (used by the
-  pre-filter)
+  scores — *same formulas as ProgramTesting9*
+- Compute an **embedding** of the business description — i.e. convert the
+  description text into a numerical "meaning fingerprint" that lets
+  companies be compared to a faculty profile by topic similarity (see
+  §3.3 for the full explanation) — *new in v2; used by the pre-filter*
+
+The difference from ProgramTesting9 is not the logic but **when it runs**:
+v1 recomputed all of this on every single run; v2 does it once and caches
+the results.
 
 Outputs `data/companies_enriched.xlsx`. Geocodes and embeddings persist in
 JSON caches (`data/cache/`), so a datasource refresh only pays for new or

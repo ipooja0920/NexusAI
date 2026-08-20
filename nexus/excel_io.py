@@ -75,15 +75,25 @@ ENRICHED_COLUMNS = [
 
 
 def write_enriched(path: Path, records: List[dict]) -> None:
+    """Rebuild the enriched file from scratch. Always a full overwrite: the
+    raw datasource is the single source of truth, so stale rows can never
+    linger from a previous run."""
     df = pd.DataFrame(records, columns=ENRICHED_COLUMNS)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Companies")
-        ws = writer.sheets["Companies"]
-        for cell in ws[1]:
-            cell.fill = HEADER_FILL
-            cell.font = HEADER_FONT
-        ws.freeze_panes = "A2"
+    try:
+        with pd.ExcelWriter(path, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Companies")
+            ws = writer.sheets["Companies"]
+            for cell in ws[1]:
+                cell.fill = HEADER_FILL
+                cell.font = HEADER_FONT
+            ws.freeze_panes = "A2"
+    except PermissionError as e:
+        raise PermissionError(
+            f"Could not write {path.name} - is it open in Excel? Close it and "
+            "re-run. Nothing was lost: geocodes and embeddings are already "
+            "cached, so the re-run will be fast and cost nothing."
+        ) from e
 
 
 def read_enriched(path: Path) -> pd.DataFrame:
@@ -183,6 +193,21 @@ ALL_COL_WIDTHS = {
 }
 
 
+def unique_path(path: Path) -> Path:
+    """Return a path that does not yet exist, adding ' (2)', ' (3)', ... if
+    needed. Output filenames carry a to-the-second timestamp, so two runs for
+    the same faculty in the same second would otherwise overwrite silently."""
+    if not path.exists():
+        return path
+    stem, suffix, parent = path.stem, path.suffix, path.parent
+    n = 2
+    while True:
+        candidate = parent / f"{stem} ({n}){suffix}"
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
 def write_faculty_output(path: Path, faculty: dict, results: List[dict],
                          run_info: dict, all_rows: Optional[List[dict]] = None) -> None:
     wb = openpyxl.Workbook()
@@ -269,4 +294,10 @@ def write_faculty_output(path: Path, faculty: dict, results: List[dict],
             cell.alignment = Alignment(vertical="top", wrap_text=True)
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(path)
+    try:
+        wb.save(path)
+    except PermissionError as e:
+        raise PermissionError(
+            f"Could not write {path.name} - is it open in Excel? "
+            "Close it and re-run."
+        ) from e
