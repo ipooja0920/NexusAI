@@ -52,6 +52,41 @@ GitHub. On a fresh clone, create the `data/` folder and add:
 | `data/companies_raw.xlsx` | Capital IQ screening export (headers on row 8, data from row 9; columns A=name, C=employees, D=revenue $USDmm, G=address, I=description, J=website) |
 | `data/Faculty Database.xlsx` | Headers on row 1: Faculty, School/College, Department, Research Description, Industry Classification1, Industry Classification2, Flag (N = not yet matched) |
 
+### Three rules about the company datasource
+
+**1. The filename must match `config.yaml` exactly — treat it as
+case-sensitive.** The name isn't hardcoded anywhere; the only thing that
+decides it is this line:
+
+```yaml
+paths:
+  companies_raw: data/companies_raw.xlsx
+```
+
+`Companies_raw.xlsx` (capital C) fails on Linux and may or may not work on
+macOS depending on how the disk was formatted. Don't rely on it — match
+the name exactly, or change the config line to match your file.
+
+**2. To refresh the datasource, overwrite the file — keep the same name.**
+The programs only ever *read* `companies_raw.xlsx`; they never write or
+delete it, so replacing it is your action. Same name means `config.yaml`
+never has to change, and nothing gets forgotten on the next refresh.
+
+**3. Never delete `companies_enriched.xlsx`.** It is rebuilt and
+overwritten on every enrichment run. There is no situation where deleting
+it first helps.
+
+> **The one trap:** if you add the new export under a *different* name
+> (`companies_raw_v2.xlsx`), both files sit in the folder and the program
+> keeps reading the old one — with no error, because the configured file
+> still exists. Stage 0 prints the path and company count it read, so
+> check those two lines after a refresh:
+>
+> ```
+> Reading Capital IQ export: .../data/companies_raw.xlsx
+> Found 61 companies.
+> ```
+
 ## Running
 
 ```bash
