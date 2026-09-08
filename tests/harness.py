@@ -182,8 +182,8 @@ class TempProject:
 
     def __enter__(self):
         self.dir = Path(tempfile.mkdtemp(prefix="nexusai_test_"))
-        (self.dir / "data" / "cache").mkdir(parents=True)
-        (self.dir / "data" / "output").mkdir(parents=True)
+        for sub in ("input", "sources", "cache", "review", "output"):
+            (self.dir / "data" / sub).mkdir(parents=True)
         self._write_config()
         self._write_companies()
         self._write_faculty()
@@ -200,11 +200,13 @@ class TempProject:
             cfg = yaml.safe_load(fh)
         # Point every path at the temp dir (absolute, so no ambiguity)
         cfg["paths"] = {
-            "companies_raw": str(self.dir / "data" / "companies_raw.xlsx"),
+            "companies_raw": str(self.dir / "data" / "input" / "companies_raw.xlsx"),
+            "faculty_database": str(self.dir / "data" / "input" / "Faculty Database.xlsx"),
             "companies_enriched": str(self.dir / "data" / "companies_enriched.xlsx"),
-            "faculty_database": str(self.dir / "data" / "Faculty Database.xlsx"),
-            "output_dir": str(self.dir / "data" / "output"),
+            "sources_dir": str(self.dir / "data" / "sources"),
             "cache_dir": str(self.dir / "data" / "cache"),
+            "review_dir": str(self.dir / "data" / "review"),
+            "output_dir": str(self.dir / "data" / "output"),
         }
         for section, values in self.config_overrides.items():
             cfg.setdefault(section, {}).update(values)
@@ -229,7 +231,7 @@ class TempProject:
             ws[f"G{r}"] = f"Headquarters\n{addr}\nUnited States\nMain Phone: 555-0100"
             ws[f"I{r}"] = desc
             ws[f"J{r}"] = web
-        wb.save(self.dir / "data" / "companies_raw.xlsx")
+        wb.save(self.dir / "data" / "input" / "companies_raw.xlsx")
 
     def _write_faculty(self):
         wb = openpyxl.Workbook()
@@ -238,7 +240,7 @@ class TempProject:
                    "Industry Classification1", "Industry Classification2", "Flag"])
         for row in self.faculty:
             ws.append(list(row))
-        wb.save(self.dir / "data" / "Faculty Database.xlsx")
+        wb.save(self.dir / "data" / "input" / "Faculty Database.xlsx")
 
     # ---------- accessors ----------
     def settings(self):

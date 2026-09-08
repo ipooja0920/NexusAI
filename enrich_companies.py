@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stage 0 - Enrich the Capital IQ company datasource.
 
-Run this once after placing/refreshing data/companies_raw.xlsx.
+Run this once after placing/refreshing data/input/companies_raw.xlsx.
 
 For every company: clean address -> geocode (cached) -> distance from
 UConn Storrs -> component scores; compute a description embedding (cached).

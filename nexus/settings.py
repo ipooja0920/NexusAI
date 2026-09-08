@@ -33,8 +33,16 @@ class Settings:
         load_dotenv(PROJECT_ROOT / ".env")
 
     # ---------- paths ----------
-    def path(self, key: str) -> Path:
-        p = Path(self.raw["paths"][key])
+    def path(self, key: str, default: str = None) -> Path:
+        """Resolve a configured path. `default` covers keys added after a
+        config file was written, so an older config.yaml keeps working
+        instead of dying with a KeyError."""
+        raw = self.raw.get("paths", {}).get(key, default)
+        if raw is None:
+            raise KeyError(
+                f"config.yaml has no paths.{key} entry, and there is no "
+                f"default for it.")
+        p = Path(raw)
         # Relative paths resolve against the folder holding config.yaml
         return p if p.is_absolute() else self.config_path.parent / p
 
@@ -54,6 +62,20 @@ class Settings:
     @property
     def cache_dir(self) -> Path:
         p = self.path("cache_dir"); p.mkdir(parents=True, exist_ok=True); return p
+
+    @property
+    def sources_dir(self) -> Path:
+        """Reference data downloaded from outside (SEC Form D, SBIR,
+        OpenAlex). Re-downloadable, never edited, never written by us."""
+        p = self.path("sources_dir", "data/sources")
+        p.mkdir(parents=True, exist_ok=True); return p
+
+    @property
+    def review_dir(self) -> Path:
+        """Workbooks that exist so a human can check name-matching quality
+        before trusting the columns it produced."""
+        p = self.path("review_dir", "data/review")
+        p.mkdir(parents=True, exist_ok=True); return p
 
     # ---------- sections ----------
     @property

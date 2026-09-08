@@ -42,15 +42,45 @@ cp .env.example .env      # then edit .env and paste your real key
 
 Requires Python 3.10+ (`python3 --version` to check).
 
-## Data files you provide (not in the repo)
+## The `data/` folder
 
 `data/` is git-ignored — Capital IQ extracts and faculty lists never go to
-GitHub. On a fresh clone, create the `data/` folder and add:
+GitHub. Each subfolder holds one *kind* of file, which is what makes it
+obvious where a new file belongs and what is safe to delete:
+
+```
+data/
+├── input/                    files YOU provide       ← never written by the programs
+│   ├── companies_raw.xlsx
+│   └── Faculty Database.xlsx
+├── sources/                  downloaded from outside ← re-downloadable
+│   ├── formd/                  SEC Form D quarters
+│   └── openalex/               raw API pulls + openalex_us.xlsx
+├── cache/                    computed by us          ← delete to force a rebuild
+│   ├── geocode.json
+│   ├── embeddings.json
+│   ├── funding_formd.json
+│   └── company_scores.json
+├── review/                   match-quality workbooks, to check by eye
+├── output/                   the final per-faculty results
+└── companies_enriched.xlsx   the hand-off between enrichment and matching
+```
+
+**How to decide where a new file goes:** if you deleted it, would you
+*re-download* it or *re-compute* it? Downloads go in `sources/`, computed
+results in `cache/`. That split is what lets you wipe all of `cache/` to
+force a clean rebuild without losing a single download, and clear `sources/`
+to reclaim disk without losing computed work.
+
+`companies_enriched.xlsx` sits at the top rather than in a subfolder because
+it belongs to neither stage — Stage 0 builds it, Stage 1 consumes it.
+
+On a fresh clone, create `data/input/` and add these two files:
 
 | File | What it is |
 |---|---|
-| `data/companies_raw.xlsx` | Capital IQ screening export (headers on row 8, data from row 9; columns A=name, C=employees, D=revenue $USDmm, G=address, I=description, J=website) |
-| `data/Faculty Database.xlsx` | Headers on row 1: Faculty, School/College, Department, Research Description, Industry Classification1, Industry Classification2, Flag (N = not yet matched) |
+| `data/input/companies_raw.xlsx` | Capital IQ screening export (headers on row 8, data from row 9; columns A=name, C=employees, D=revenue $USDmm, G=address, I=description, J=website) |
+| `data/input/Faculty Database.xlsx` | Headers on row 1: Faculty, School/College, Department, Research Description, Industry Classification1, Industry Classification2, Flag (N = not yet matched) |
 
 ### Three rules about the company datasource
 
@@ -60,7 +90,7 @@ decides it is this line:
 
 ```yaml
 paths:
-  companies_raw: data/companies_raw.xlsx
+  companies_raw: data/input/companies_raw.xlsx
 ```
 
 `Companies_raw.xlsx` (capital C) fails on Linux and may or may not work on
@@ -83,8 +113,8 @@ it first helps.
 > check those two lines after a refresh:
 >
 > ```
-> Reading Capital IQ export: .../data/companies_raw.xlsx
-> Found 61 companies.
+> Reading Capital IQ export: .../data/input/companies_raw.xlsx
+> Found 2478 companies.
 > ```
 
 ## Running
@@ -113,10 +143,13 @@ Almost none — the programs look after their own files.
 
 | File | Do you ever touch it? |
 |---|---|
-| `data/companies_raw.xlsx` | **Yes** — you replace it when you refresh the Capital IQ extract. Read-only to the programs. |
-| `data/Faculty Database.xlsx` | **Yes** — you add faculty rows. The program only writes the Flag cell (`N` → `Y`). |
+| `data/input/companies_raw.xlsx` | **Yes** — you replace it when you refresh the Capital IQ extract. Read-only to the programs. |
+| `data/input/Faculty Database.xlsx` | **Yes** — you add faculty rows. The program only writes the Flag cell (`N` → `Y`). |
+| `data/sources/formd/` | **Yes** — you drop each downloaded SEC quarter in here. Nothing else needs changing. |
+| `data/sources/openalex/` | No — written by `fetch_openalex.py`. |
 | `data/companies_enriched.xlsx` | No — rebuilt and overwritten on every enrichment run. Never needs deleting. |
 | `data/cache/*.json` | No — grows on its own. Delete only to deliberately force re-geocoding or re-scoring. |
+| `data/review/*.xlsx` | Read them — that's their whole purpose. Overwritten on each run. |
 | `data/output/*.xlsx` | Optional — each run writes a new timestamped file, so these accumulate. Tidy up old ones if you like. |
 
 If a file is open in Excel when the program tries to write it, you'll get a
