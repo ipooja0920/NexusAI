@@ -133,6 +133,87 @@ On a fresh clone, create `data/input/` and add these two files:
 | `data/input/companies_raw.xlsx` | Capital IQ screening export (headers on row 8, data from row 9; columns A=name, C=employees, D=revenue $USDmm, G=address, I=description, J=website) |
 | `data/input/Faculty Database.xlsx` | Headers on row 1: Faculty, School/College, Department, Research Description, Industry Classification1, Industry Classification2, Flag (N = not yet matched) |
 
+## Where to download each source
+
+Everything in `data/sources/` is public data you fetch yourself. This section
+is the record of *where from*, so a refresh a year from now doesn't start with
+hunting for the right page.
+
+### SEC Form D — private capital raises
+
+**Download from:**
+<https://www.sec.gov/data-research/sec-markets-data/form-d-data-sets>
+
+Form D is the notice a company files when it raises private capital without
+registering with the SEC. It gives a dated dollar amount from the company's
+own filing, and it covers exactly the young private companies Capital IQ
+has no revenue for.
+
+SEC ships this **one .zip per quarter**, so you pick your history at download
+time — grab every quarter back as far as you want to go. Put each one in its
+own folder:
+
+```
+data/sources/formd/
+├── 2023Q1_d/          ← unzipped folder, or leave it as 2023q1.zip
+├── 2023Q2_d/
+└── ...                  both forms work; the folder names don't matter
+```
+
+The reader scans the folder for anything that looks like a quarter, so adding
+one later is just dropping it in and re-running. Only three files inside each
+quarter are used — `ISSUERS.tsv`, `OFFERING.tsv`, `FORMDSUBMISSION.tsv` — but
+leaving the rest in place is harmless.
+
+> Note: <https://www.sec.gov/data-research/final-data-quality-assurance-guidelines>
+> is **not** this. That page is the SEC's 2002 information-quality policy —
+> no datasets on it. Easy to land on by mistake when searching sec.gov.
+
+### SBIR / STTR — federal R&D awards
+
+**Download from:** <https://www.sbir.gov/awards>
+
+Grant money is not a securities offering, so a company living on SBIR awards
+files no Form D at all. That makes this the complement to Form D rather than
+an overlap — same reason both are worth having.
+
+Scroll past the search filters to this line on the page:
+
+> "Download all SBIR.gov award data either with **award abstracts** (290MB)
+> or without award abstracts (65MB)."
+
+Click **award abstracts** — direct link:
+<https://data.www.sbir.gov/mod_awarddatapublic/award_data.csv>
+
+Save it as `data/sources/sbir/award_data.csv`.
+
+The abstracts are why we take the larger file. They describe the actual
+research each award funded, which for a tiny R&D company is far richer than
+its one-line Capital IQ description. Without-abstracts
+(<https://data.www.sbir.gov/mod_awarddatapublic_no_abstract/award_data_no_abstract.csv>,
+65MB) carries the same dollar amounts and dates if you only want the funding
+signal.
+
+**Ignore the year filter on the website.** The page lets you filter by year,
+agency, phase, program and state before downloading — but take the whole file
+anyway and narrow at read time with `--min-year`. Unlike Form D, SBIR is a
+single CSV covering every award since 1983, so history is free here. Filtering
+at download time just means re-downloading when you change your mind.
+
+There is also an Award API at <https://www.sbir.gov/api>. Don't use it: it was
+under maintenance as of September 2026, it exposes fewer fields than the bulk
+file, and 200k awards over the network is slower than one file you re-read for
+free.
+
+SBIR refreshes the file monthly.
+
+### OpenAlex — research and funding track record
+
+No manual download — `fetch_openalex.py` pulls it from the API into
+`data/sources/openalex/`. An API key is optional but raises the daily budget
+from $0.10 to $1; get one free at <https://openalex.org/settings/api> and add
+it to `.env` as `OPENALEX_API_KEY=...`.
+
 ### Three rules about the company datasource
 
 **1. The filename must match `config.yaml` exactly — treat it as
