@@ -7,6 +7,44 @@ See **[PRODUCT_SPEC.md](PRODUCT_SPEC.md)** for the full architecture, how
 it differs from the previous watcher/monster-program system, and the
 scoring model reference.
 
+## Project layout
+
+```
+NexusAI/
+├── config.yaml               every path, weight, cutoff and model name
+├── requirements.txt
+├── .env                      your OpenAI key (git-ignored, never commit)
+├── .env.example
+│
+├── enrich_companies.py       STAGE 0 — builds companies_enriched.xlsx
+├── enrich_funding.py         source step — SEC Form D  → cache
+├── fetch_openalex.py         source step — OpenAlex    → sources/
+├── match_faculty.py          STAGE 1 — faculty → ranked companies
+├── run_tests.py              93 tests, ~5s, no API key needed
+│
+├── nexus/                    the shared library
+│   ├── settings.py             config loader, path resolution
+│   ├── excel_io.py             read/write every workbook
+│   ├── geo.py                  address cleaning, geocoding, distance
+│   ├── prefilter.py            embeddings + cosine similarity
+│   ├── scoring.py              LLM prompts + component score maths
+│   ├── matching.py             company-name normaliser (all sources)
+│   └── cache.py                the JSON caches
+│
+├── tests/                    each test builds its own throwaway project
+│
+└── data/                     git-ignored — see below
+    ├── input/                  files YOU provide
+    ├── sources/                downloaded from outside
+    ├── cache/                  computed by us
+    ├── review/                 match-quality workbooks
+    ├── output/                 final per-faculty results
+    └── companies_enriched.xlsx
+```
+
+Only `data/` and `.env` stay off GitHub. Everything else is code and is
+safe to clone, zip, or hand to someone else.
+
 ## How it works
 
 **Stage 0 — `enrich_companies.py`** (run once, and again only when you
@@ -15,6 +53,19 @@ address → distance from UConn Storrs, parses revenue/employees into
 component scores, and computes a description embedding. Results are written
 to `data/companies_enriched.xlsx`; geocodes and embeddings are cached in
 `data/cache/` so a datasource refresh only pays for what changed.
+
+**Source steps — `enrich_funding.py`, `fetch_openalex.py`** (run on their own
+schedule, whenever you refresh a download): each reads one external dataset,
+matches it to your companies by name, and writes the result to `data/cache/`.
+They never touch the enriched workbook — Stage 0 is the only thing that
+writes it, and picks these caches up on its next run. If a cache doesn't
+exist yet, those columns just come out blank; nothing breaks and no run
+order is required.
+
+| Script | Reads | Answers |
+|---|---|---|
+| `enrich_funding.py` | `sources/formd/` | has this company raised private capital, how much, how recently? |
+| `fetch_openalex.py` | OpenAlex API | does it publish research or fund academic work? |
 
 **Stage 1 — `match_faculty.py`** (run whenever faculty have `Flag = N`):
 for each unmatched faculty, builds a research profile, pre-filters the
@@ -126,12 +177,23 @@ python enrich_companies.py          # after adding/refreshing the datasource
 python match_faculty.py             # match everyone with Flag = N
 ```
 
+After adding a new download to `data/sources/`, run its source step, then
+Stage 0 again to fold the result into the enriched workbook:
+
+```bash
+python enrich_funding.py            # after adding SEC quarters to sources/formd/
+python fetch_openalex.py            # downloads to sources/openalex/ (~200MB)
+python enrich_companies.py          # rebuild — free, everything else is cached
+```
+
 Useful options:
 
 ```bash
 python match_faculty.py --dry-run             # show what would run, no API spend
 python match_faculty.py --faculty "Ioulia Valla"   # force one faculty, ignore flag
 python enrich_companies.py --skip-geocode     # skip geocoding (testing only)
+python enrich_funding.py --min-year 2023      # ignore older Form D filings
+python fetch_openalex.py --refresh            # refetch instead of reusing sources/
 ```
 
 You only need `enrich_companies.py` when the company datasource changes.
