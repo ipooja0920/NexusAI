@@ -144,10 +144,28 @@ hunting for the right page.
 **Download from:**
 <https://www.sec.gov/data-research/sec-markets-data/form-d-data-sets>
 
+Or navigate there from the top of <https://www.sec.gov>:
+
+```
+Data & Research  →  SEC & Markets Data  →  Form D Data Sets
+```
+
+(The URL mirrors that path, so if the menu is reorganised the address above
+still tells you where it used to live.)
+
 Form D is the notice a company files when it raises private capital without
 registering with the SEC. It gives a dated dollar amount from the company's
 own filing, and it covers exactly the young private companies Capital IQ
 has no revenue for.
+
+**SEC posts a new quarter every quarter**, so this page keeps growing — a
+quarter you downloaded is final and never changes, but there is always a
+newer one to add. Their stated rule: anything filed after 5:30pm Eastern on
+the last business day of a quarter lands in the *next* quarterly posting. So
+after a quarter closes, give it a few weeks before expecting the file.
+
+To stay current you only ever download the quarters you don't already have;
+you never re-download the old ones.
 
 SEC ships this **one .zip per quarter**, so you pick your history at download
 time — grab every quarter back as far as you want to go. Put each one in its
