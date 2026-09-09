@@ -132,14 +132,32 @@ def load_ticker_map(refresh: bool) -> dict:
         print("  WARNING: could not load company_tickers.json - "
               "CSVs will have no ticker column filled in")
         return {}
-    out = {}
+    # A CIK can carry several tickers - common stock plus preferred shares,
+    # warrants and rights (CIK 1652044 is GOOGL, GOOG, GOOGM and GOOGN;
+    # Ford is F, F-PB, F-PC, F-PD). 1,441 of 8,013 CIKs are like this.
+    # Keeping whichever arrived last stored "GOOGN" for Alphabet, which
+    # matches nothing. Prefer the common-stock ticker: no dash, then
+    # shortest, then alphabetical.
+    def rank(t: str) -> tuple:
+        return ("-" in t, len(t), t)
+
+    best = {}
     for row in data.values():
         try:
-            out[int(row["cik_str"])] = (row.get("ticker"), row.get("title"))
+            cik, tick = int(row["cik_str"]), (row.get("ticker") or "").upper()
+            title = row.get("title")
         except (KeyError, TypeError, ValueError):
             continue
-    print(f"  ticker map: {len(out):,} public companies")
-    return out
+        if not tick:
+            continue
+        if cik not in best or rank(tick) < rank(best[cik][0]):
+            best[cik] = (tick, title)
+
+    multi = len(data) - len(best)
+    print(f"  ticker map: {len(best):,} companies"
+          + (f" ({multi:,} extra tickers collapsed to the common share)"
+             if multi else ""))
+    return best
 
 
 COLUMNS = ["cik", "cik_padded", "ticker", "entity_name", "sec_title",
