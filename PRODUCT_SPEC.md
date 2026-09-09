@@ -1,7 +1,7 @@
 # NexusAI — Product Specification
 
 **Faculty ↔ Industry Matching Pipeline, v2 architecture**
-*University of Connecticut · August 2026*
+*University of Connecticut · September 2026*
 
 ---
 
@@ -222,40 +222,105 @@ NexusAI/
 ├── config.yaml              # all paths, weights, cutoffs, models
 ├── requirements.txt         # pinned dependencies (Python 3.10+)
 ├── .env.example             # template for OPENAI_API_KEY (real .env git-ignored)
-├── enrich_companies.py      # Stage 0 CLI
-├── match_faculty.py         # Stage 1 CLI (--dry-run, --faculty "Name")
-├── test_smoke.py            # offline end-to-end test with mocked AI
-├── nexus/                   # importable core (future Streamlit UI reuses this)
+│
+├── enrich_companies.py      # Stage 0 — builds companies_enriched.xlsx
+├── enrich_funding.py        # source step — SEC Form D
+├── enrich_sbir.py           # source step — SBIR/STTR awards
+├── fetch_openalex.py        # source step — OpenAlex research record
+├── fetch_sec_xbrl.py        # source step — R&D expense from SEC XBRL
+├── match_faculty.py         # Stage 1 — faculty → ranked companies
+├── run_tests.py             # 137 tests, ~5s, no API key or network needed
+│
+├── nexus/                   # importable core (a future UI reuses this)
 │   ├── settings.py          # config loader
 │   ├── cache.py             # persistent JSON caches
 │   ├── geo.py               # address cleaning, geocoding, distance
+│   ├── matching.py          # company-name matching, shared by every source
 │   ├── scoring.py           # prompts, parsing, component score math
 │   ├── prefilter.py         # embeddings + cosine ranking
 │   └── excel_io.py          # all Excel read/write
-└── data/                    # git-ignored: datasource, faculty DB, caches, outputs
+├── tests/
+└── data/                    # git-ignored
+    ├── input/               # files you provide
+    ├── sources/             # downloaded reference data
+    ├── cache/               # things we computed
+    ├── review/              # match-quality workbooks
+    ├── output/              # per-faculty results
+    └── companies_enriched.xlsx
 ```
 
 `data/` never reaches GitHub: Capital IQ extracts are licensed and the
-faculty list is internal. Only code and config templates are published.
+faculty list is internal.
+
+Each folder under `data/` holds one kind of file. The test for where
+something belongs: **if you deleted it, would you re-download it or
+re-compute it?** Downloads go in `sources/`, computed results in `cache/`.
+That split means `cache/` can be wiped for a clean rebuild without losing a
+download, and `sources/` cleared to reclaim disk without losing computed
+work.
 
 ### 4.1 Data file lifecycle
 
-Each file under `data/` has a different update behavior — knowing which is
-which prevents surprises:
-
-| File | Written by | Behavior |
+| File | Written by | Behaviour |
 |---|---|---|
-| `companies_raw.xlsx` | **You** (Capital IQ extract) | Never touched by the programs — read-only input. Changes only when you replace it with a refreshed extract. |
-| `companies_enriched.xlsx` | `enrich_companies.py` | **Rebuilt and overwritten on every enrichment run.** It is purely derived data, so the current raw file is always its single source of truth. Nothing of value is lost by overwriting — the expensive ingredients live in the caches. |
-| `cache/*.json` (geocodes, embeddings, company scores) | Both programs | **Append-only** — entries are added, never replaced. This is what makes re-runs and datasource refreshes cheap. |
-| `Faculty Database.xlsx` | You + `match_faculty.py` | You add/edit rows; the program writes only the Flag cell (`N → Y`) after a successful match. |
-| `output/*.xlsx` | `match_faculty.py` | **Never overwritten** — every run creates a new timestamped file. |
+| `input/companies_raw.xlsx` | **You** (Capital IQ extract) | Read-only to the programs. Changes only when you replace it. |
+| `input/Faculty Database.xlsx` | You + `match_faculty.py` | You add rows; the program writes only the Flag cell (`N → Y`). |
+| `sources/*` | **You**, or a fetch script | Downloaded public data. Never edited. |
+| `cache/*.json` | The source steps | Append-only. This is what makes re-runs cheap. |
+| `companies_enriched.xlsx` | `enrich_companies.py` | **Rebuilt from raw + caches every run.** Purely derived, so it can never drift from the datasource. |
+| `review/*.xlsx` | The source steps | Overwritten each run. For checking match quality by eye. |
+| `output/*.xlsx` | `match_faculty.py` | Never overwritten — every run writes a new timestamped file. |
 
-When to run what: `enrich_companies.py` is needed **only when
-`companies_raw.xlsx` changes**. The day-to-day loop is just
-`match_faculty.py`. Running enrichment by accident with an unchanged
-datasource is harmless — it rebuilds the enriched file identically in
-seconds, entirely from cache, with zero API spend.
+`enrich_companies.py` is needed only when `companies_raw.xlsx` changes, or
+after a source step has refreshed a cache. Running it unnecessarily is
+harmless: it rebuilds identically in seconds, entirely from cache, with no
+API spend.
+
+### 4.2 Funding and track-record sources
+
+Capital IQ leaves revenue blank for **1,762 of 2,477** companies — almost
+all of them private. Four public datasets fill parts of that gap. Each has
+its own reader, its own cache and its own review sheet, so they refresh
+independently and a problem in one never forces a rebuild of the others.
+
+| Source | Answers | Reach |
+|---|---|---|
+| **SEC Form D** | did investors put private capital in, how much, when | 325 companies, 225 with no CIQ revenue |
+| **SBIR/STTR** | did the federal government pay them to do research | 391 companies, 287 with no CIQ revenue |
+| **SEC XBRL** | how much do they spend on R&D | ~176 public companies |
+| **OpenAlex** | do they publish research or fund academic work | not yet matched |
+
+Form D and SBIR barely overlap — only 65 companies match both — because
+grant money is not a securities offering, so a company living on SBIR
+awards files no Form D at all. Together they cover **452 of the 1,762
+companies Capital IQ knows nothing about (26%)**.
+
+#### Matching companies across sources
+
+Every source joins to the Capital IQ list through `nexus/matching.py`, so
+the rule is written once and improving it improves all of them.
+
+Names are normalised before comparison — lowercased, punctuation and legal
+suffixes stripped — so `AERODYNE RESEARCH INC` and `Aerodyne Research, Inc.`
+both become `aerodyne research`. An exact match on that key is the starting
+point, never the conclusion: company names are not unique.
+
+What settles it is the **website**. A domain is a registered identifier a
+company keeps through a move and a rename, so:
+
+- website agrees → same company, whatever the address says
+- website disagrees → different companies
+- nothing to compare → the name match stands on its own
+
+**A differing address is not evidence.** Sources record the address as at
+the time of the record — SBIR stamps a 1998 award with a 1998 address and
+never revisits it. Alexion is in Massachusetts and its older records say
+Connecticut because it moved after the last one. An earlier version rejected
+on this and discarded 35 real companies.
+
+SBIR also falls back to matching on website when the name does not match,
+which finds eight companies that renamed themselves — Antigenics became
+Agenus, ProterixBio was BioScale, KALA BIO was Kala Pharmaceuticals.
 
 ## 5. Scoring model reference
 
@@ -272,22 +337,116 @@ All weights and thresholds are `config.yaml` values.
 
 ## 6. Known limitations
 
-- LLM scores rely on a single `gpt-5-nano` call without web search;
-  obscure companies may score "NA" (excluded from normalization, never
-  falsely boosted).
+### Matching
+
+- Matching is exact-after-normalisation, not fuzzy. A misspelling, or a
+  rename with no shared website, is a miss. This is deliberate: a wrong
+  match silently attributes another company's money, which is worse.
+- **Three companies are excluded** as unresolvable: `Casimir, LLC`
+  (casimirtrials.com here, casimirspace.com in SBIR — different companies
+  sharing a name), and `Imt, LLC` and `EMD Holding Corp.`, three-letter
+  names with nothing to corroborate them.
+- The datasource contains roughly ten duplicate companies — the same firm
+  under two names, e.g. `Abbratech, Inc.` and `AbbraTech Holdings LLC`. They
+  match the same external record, which is correct, but both appear in a
+  faculty's results.
+- **No address fallback**, though it would add 215 matches. 2,035 of the
+  25,094 addresses in the SBIR file host more than one company (one hosts
+  32) because biotech firms cluster in shared incubators. It would hand a
+  company its neighbours' grants.
+- **No previous-name fallback for Form D**, though the file offers six such
+  columns and they would add 22 matches. Those record legal continuity, not
+  business continuity: most are reverse mergers where a shell takes on a
+  different business. Six have both names in the datasource (Arsanis and X4
+  Pharmaceuticals), so following them would attribute one raise to two
+  companies.
+
+### Funding data
+
+- **A lifetime total is not spending capacity.** Inotek Pharmaceuticals
+  shows $38.4m of SBIR awards, all of it between 1997 and 2005 and long
+  spent. The `_recent_usd` columns (5-year window) represent capacity; the
+  `_total_usd` columns are reference only.
+- **Most SBIR history is old.** Only 140 of 391 matched companies have an
+  award in the last five years; 140 last won one before 2015. SBIR
+  contributes far more to track record than to current capacity.
+- **`funding_total_usd` mixes two kinds of dollar.** A federal grant is
+  reimbursement for work on a specific project; a Series A is equity in the
+  bank. The combined figure is coarse by nature — fine for a 0.10 weight,
+  but the per-source columns are what to trust.
+- **The Form D window starts in 2023** because that is what was downloaded,
+  not a limit of the data. Rounds before then are missing — Centrexion's
+  $67m Series D, for example. The SEC publishes quarters back to 2009.
+
+### Coverage gaps
+
+- **`university_current` names only 2 companies.** `Contract End Date` is
+  filled for 49% of awards, and most university ties in the data ended
+  between 2016 and 2024. The column can say *yes* confidently but never
+  *no*. `university_past` (83 companies) is the useful one.
+- `RI Name` is filled for only 9.8% of awards once placeholders are
+  removed — the literal string `Stub` accounts for 41% of that column. A
+  blank means "no STTR award", not "no university ties".
+- SBIR fills `Company Website` for 55.9% of awards, so the website check —
+  the strongest signal available — cannot run on nearly half the data.
+- **SEC XBRL reaches ~176 companies, nearly all of which already have
+  revenue.** It adds a better signal (research intensity) on companies
+  already known, not coverage of unknown ones.
+- The Capital IQ export is screened to a single industry, so the industry
+  column is constant across all 2,477 rows. The agency-to-industry mapping
+  in `enrich_sbir.py` is built but cannot be tuned until the datasource
+  spans more industries.
+
+### Deliberately not used
+
+- **Web search for funding figures.** Tested on four companies: structured
+  funding databases are paywalled, and search returns confident,
+  relevant-looking results about *different* companies. Asked how much
+  Pelias Technologies raised, the results offered Egalet's $27.6m. A
+  dataset fails loudly when a company is absent; search fails silently.
+- **The USAspending database subset.** Its award table covers 2025–2026
+  only, and the per-recipient totals are last-12-months, so companies with
+  decades of federal awards read as $0.
+
+### Scoring and pipeline
+
+- LLM scores use a single `gpt-5-nano` call with no web search; obscure
+  companies may score "NA" (excluded from normalisation, never falsely
+  boosted).
 - The embedding pre-filter is the one lossy step: a match invisible in a
-  company's description could be dropped before LLM scoring. Mitigated by
-  a generous cutoff (300) that is configurable up to "score everything".
-- Nominatim geocoding is rate-limited (~1/sec); the first enrichment of a
-  large datasource takes hours (once).
-- Faculty Database writes fail if the file is open in Excel; the program
-  reports this clearly and the flag system makes re-running safe.
+  company's description can be dropped before LLM scoring. Mitigated by a
+  generous cutoff (300), configurable up to "score everything".
+- Award titles and abstracts are collected but **not** used to enrich
+  company descriptions. Doing so would change `company_embedding_text()`
+  and therefore which companies reach the LLM for every faculty member —
+  a matching change, not an additive one, and it needs its own measurement.
+- Nominatim geocoding is rate-limited (~1/sec), so the first enrichment of
+  a large datasource takes hours. Once.
+- Writes fail if the target file is open in Excel; the program says so
+  plainly and the caches make re-running free.
 
 ## 7. Roadmap
 
-1. **Now** — CLI on a single Mac; one faculty at a time or batch by flag
-2. **Next** — datasource expansion (NY); revisit revenue-band policy after
-   reviewing first real outputs; optional PPT export if wanted
-3. **Later** — dedicated Windows machine or per-user installs (code is
-   already cross-platform); Streamlit UI wrapping the `nexus/` modules;
-   optional watcher integration for drop-folder automation
+**Done** — Stage 0 and Stage 1; Form D, SBIR and SEC XBRL readers; shared
+company matching.
+
+**Next**
+
+1. Join the funding caches into `companies_enriched.xlsx` as columns. The
+   caches exist; nothing reads them yet.
+2. Match OpenAlex against the datasource — fetched, not yet joined.
+3. Decide how funding feeds the score. It should probably not be linear in
+   dollars: the revenue component already scores a billion-dollar company
+   at zero, on the view that it is too large to care about a UConn
+   partnership, and funding capacity likely wants the same shape.
+
+**Later**
+
+- Enrich company descriptions from SBIR award titles. Measure the effect on
+  a real faculty's rankings first — it changes the pre-filter, not just a
+  column.
+- Extend the Form D download back beyond 2023.
+- Datasource expansion beyond one industry, which is also what makes the
+  agency-to-industry mapping testable.
+- Windows machine or per-user installs (the code is already
+  cross-platform); a UI wrapping the `nexus/` modules.
