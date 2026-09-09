@@ -185,10 +185,14 @@ class TestMatchConfidence(unittest.TestCase):
 
     def test_relocation_is_not_a_rejection(self):
         """BrightSpec is in MA; its SBIR awards are stamped VA. Same company.
-        A state disagreement alone must never veto the match."""
+
+        A differing state carries no weight at all: sources freeze the
+        address as at the time of the record, so a company that moved will
+        always disagree. With no website to check, the name match stands.
+        """
         self.assertEqual(
             match_confidence("brightspec", our_state="MA", their_state="VA"),
-            "unverified")
+            "high")
         self.assertIn(
             match_confidence("brightspec", our_state="MA", their_state="VA"),
             TRUSTED_CONFIDENCE)
@@ -237,20 +241,49 @@ class TestMatchConfidence(unittest.TestCase):
                              their_state={"NJ", "MA"}), "high")
 
     def test_no_corroboration_but_distinctive_name(self):
+        """Nothing to check against, but 'evolveimmune therapeutics' is not
+        a name two companies land on by accident."""
         self.assertEqual(
-            match_confidence("evolveimmune therapeutics"), "unverified")
+            match_confidence("evolveimmune therapeutics"), "high")
 
     def test_no_corroboration_and_generic_name_is_suspect(self):
+        """The one case a name match cannot carry on its own: a name common
+        enough that two companies could plausibly share it, with no state
+        and no website to settle it."""
         self.assertEqual(match_confidence("acme"), "suspect")
         self.assertEqual(match_confidence(""), "suspect")
 
+    def test_a_generic_name_is_rescued_by_a_matching_state(self):
+        self.assertEqual(
+            match_confidence("acme", our_state="MA", their_state="MA"), "high")
+
+    def test_only_a_differing_website_rejects(self):
+        """Casimir: same name, casimirtrials.com here, casimirspace.com in
+        SBIR, and the states differ too. Nothing agrees, so it is rejected."""
+        self.assertEqual(
+            match_confidence("casimir", our_state="MA", their_state="TX",
+                             our_domain="casimirtrials.com",
+                             their_domains={"casimirspace.com"}),
+            "suspect")
+
+    def test_a_rebrand_keeps_its_match_when_the_state_agrees(self):
+        """Lyra Therapeutics was 480 Biomedical and never left MA. Five real
+        companies rebranded to a new domain while staying put, so a
+        differing website must not override a state that agrees."""
+        self.assertEqual(
+            match_confidence("lyra therapeutics", our_state="MA",
+                             their_state="MA",
+                             our_domain="lyratherapeutics.com",
+                             their_domains={"480biomedical.com"}),
+            "high")
+
     def test_missing_website_on_one_side_is_not_disagreement(self):
         """SBIR fills Company Website only 55.9% of the time. A blank must
-        never be read as 'different'."""
+        never be read as 'different' - it means 'nothing to check'."""
         self.assertEqual(
             match_confidence("brightspec", our_state="MA", their_state="VA",
                              our_domain="brightspec.com", their_domains=set()),
-            "unverified")
+            "high")
         self.assertEqual(
             match_confidence("brightspec", our_state="MA", their_state="MA",
                              our_domain=None, their_domains={"brightspec.com"}),

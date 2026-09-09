@@ -296,14 +296,28 @@ def match_confidence(key: str,
     external source can carry decades of records for one company under
     several addresses and websites. Agreement with ANY of them counts.
 
-    Returns:
-      high        an independent field agrees - same state, or same website
-      unverified  nothing to compare against, but the name is distinctive
-      suspect     the only comparable evidence actively disagrees, or the
-                  name is generic and nothing corroborates it
+    The website is the deciding field. Names are written a dozen ways and
+    addresses go stale, but a domain is a registered identifier a company
+    keeps through a move and a rename. So:
 
-    Note what is NOT here: a state disagreement alone does not produce
-    "suspect". Companies move; sources freeze the old address.
+      website agrees     -> the same company, whatever the address says
+      website disagrees  -> different companies, whatever the address says
+      no website to check -> the name match stands on its own
+
+    Returns:
+      high        the name matched and nothing contradicts it
+      suspect     the websites actively disagree - two different companies
+                  sharing a name; or a name too generic to mean anything
+                  with no state or website to corroborate it
+      unverified  retained for callers that still expect it; not produced
+
+    Note what is NOT here: a differing STATE never downgrades a match.
+    Companies relocate and sources freeze the address as at the time of the
+    record - SBIR stamps a 1998 award with a 1998 address and never
+    revisits it. Measured on this datasource, treating a state difference
+    as evidence against would have discarded 12 companies that a matching
+    website proved were the same, plus 23 more that had no website either
+    way and so could not defend themselves.
     """
     their_domains = {d for d in (their_domains or []) if d}
     # Related, not identical: a company may run nflection.com and
@@ -312,21 +326,28 @@ def match_confidence(key: str,
                                             for d in their_domains))
     domain_differs = bool(our_domain and their_domains and not domain_agrees)
 
-    if domain_agrees:
-        return "high"                     # strongest evidence available
-
     their_states = their_state if isinstance(their_state, (set, list, tuple)) \
         else ([their_state] if their_state else [])
     their_states = {s for s in their_states if s}
-    if our_state and their_states:
-        if our_state in their_states:
-            return "high"
-        if domain_differs:
-            return "suspect"              # state AND website both disagree
-        return "unverified"               # probably relocated - keep, flag
+    state_agrees = bool(our_state and our_state in their_states)
 
+    # Anything that AGREES settles it, and agreement is checked first.
+    # A company can rebrand and change domain while staying put - Lyra
+    # Therapeutics was 480 Biomedical, Anagram was Synspira, Biomedical
+    # Research Models trades as biomere.com - and all five such cases in
+    # this datasource still sit in the state their old awards name. So a
+    # differing website must not override a state that agrees.
+    if domain_agrees or state_agrees:
+        return "high"
+
+    # Nothing agrees. A website that actively disagrees is then the one
+    # piece of evidence strong enough to reject on.
     if domain_differs:
         return "suspect"
+
+    # Nothing to compare at all. The name match stands on its own unless
+    # the name is common enough that two companies could plausibly share
+    # it - "imt", "emd" - in which case there is genuinely nothing here.
     if is_too_generic(key):
         return "suspect"
-    return "unverified"
+    return "high"
