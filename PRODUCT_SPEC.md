@@ -342,12 +342,17 @@ matches on this and discarded a substantial number of real companies.
 Not every dataset carries the same identifying fields, so the same rule
 does different amounts of work depending on the source:
 
-| Dataset | Name | Address | Website | How it is matched |
-|---|---|---|---|---|
-| **SEC Form D** | ✓ | ✓ | — | name only, corroborated by state |
-| **SBIR/STTR** | ✓ | ✓ | partly filled | name, falling back to website |
-| **SEC XBRL** | ✓ | — | — | ticker → CIK, an exact identifier |
-| **OpenAlex** | ✓ | region only | homepage | name, falling back to website |
+| Dataset | Name | Address | Website | How it is matched | Built? |
+|---|---|---|---|---|---|
+| **SEC Form D** | ✓ | ✓ | — | name only, corroborated by state | yes |
+| **SBIR/STTR** | ✓ | ✓ | partly filled | name, falling back to website | yes |
+| **SEC XBRL** | ✓ | — | — | ticker → CIK, an exact identifier | **downloaded only** |
+| **OpenAlex** | ✓ | region only | homepage | name, falling back to website | **not yet** |
+
+The script names record this: `enrich_*` scripts match a dataset against
+the datasource and write a cache; `fetch_*` scripts only download. XBRL and
+OpenAlex are currently fetch-only, so their data sits in `data/sources/`
+with nothing joining it to our companies yet.
 
 Two consequences worth being explicit about:
 
@@ -358,12 +363,13 @@ simply a miss there — where in a dataset with websites it would still be
 found. Form D does publish previous-name fields, but those record legal
 rather than business continuity and are deliberately not used (see §6).
 
-**SEC XBRL does not use this matcher at all.** Public companies carry a
+**SEC XBRL will not use this matcher at all.** Public companies carry a
 ticker in the Capital IQ name, and SEC publishes a ticker-to-CIK map, so
 the join is an exact identifier lookup with no name comparison and no
 ambiguity. That is the strongest form of matching available, and it is
 possible only because both sides share a registered identifier — which is
-exactly what private companies lack.
+exactly what private companies lack. The download and the ticker map are in
+place; the join itself is not written yet.
 
 ## 5. Scoring model reference
 
@@ -479,12 +485,15 @@ company matching.
 
 **Next**
 
-1. Join the funding caches into `companies_enriched.xlsx` as columns. The
-   caches exist; nothing reads them yet.
-2. Match OpenAlex against the datasource — fetched, not yet joined.
-3. Decide how funding feeds the score. It should probably not be linear in
-   dollars: the revenue component already scores a billion-dollar company
-   at zero, on the view that it is too large to care about a UConn
+1. **Match SEC XBRL** to the datasource by ticker → CIK, writing a cache and
+   a review sheet like the other sources. The data is downloaded but
+   nothing joins it to our companies.
+2. **Match OpenAlex** the same way — also downloaded, also unjoined.
+3. **Join every cache into `companies_enriched.xlsx`** as columns. This is
+   the step that makes any of the enrichment visible to matching.
+4. **Decide how funding feeds the score.** It should probably not be linear
+   in dollars: the revenue component already scores a billion-dollar
+   company at zero, on the view that it is too large to care about a UConn
    partnership, and funding capacity likely wants the same shape.
 
 **Later**
