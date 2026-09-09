@@ -44,7 +44,8 @@ from typing import Optional
 import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 
-from nexus.matching import (is_too_generic, normalise_company_name,
+from nexus.matching import (TRUSTED_CONFIDENCE, match_confidence,
+                            normalise_company_name, state_code,
                             state_from_address)
 from nexus.settings import Settings
 
@@ -247,7 +248,26 @@ def aggregate(df: pd.DataFrame) -> dict:
 # ----------------------------------------------------------------------
 
 def match_companies(companies: pd.DataFrame, formd: dict) -> list:
-    """Join our companies to the Form D index, with a state cross-check."""
+    """Join our companies to the Form D index.
+
+    Uses the same rule as every other source - nexus.matching.match_confidence
+    - rather than its own. A differing state used to reject a match here,
+    which discarded companies for the one thing that carries no information:
+    a filing records the address as at the time of filing, and companies
+    move. Alexion is in MA and its older records say CT.
+
+    There is no website fallback, unlike SBIR: Form D's ISSUERS table has no
+    website column, so there is no domain to fall back to.
+
+    There is deliberately no PREVIOUS-NAME fallback either, though the table
+    offers six such columns and they would add 22 matches. Those columns
+    record legal continuity, not business continuity - most of the 22 are
+    reverse mergers, where a shell company takes on an entirely different
+    business. Six of them have BOTH names in the datasource (Arsanis and
+    X4 Pharmaceuticals; AVROBIO and Tectonic Therapeutic), so matching on
+    the previous name would attribute one company's raise to two. A domain
+    tracks the business and is safe to follow; a previous name does not.
+    """
     rows = []
     for _, c in companies.iterrows():
         name = c.get("company")
@@ -257,17 +277,8 @@ def match_companies(companies: pd.DataFrame, formd: dict) -> list:
             continue
 
         our_state = state_from_address(c.get("address_cleaned") or c.get("address"))
-        their_state = (rec.get("state") or "").strip().upper() or None
-
-        # A state agreement is much stronger corroboration than name length,
-        # so it is checked first and settles the question either way. The
-        # genericness heuristic only matters when no state is available.
-        if our_state and their_state:
-            confidence = "high" if our_state == their_state else "state-mismatch"
-        elif is_too_generic(key):
-            confidence = "generic-name"
-        else:
-            confidence = "unverified-state"
+        their_state = state_code(rec.get("state"))
+        confidence = match_confidence(key, our_state, their_state)
 
         rows.append({
             "company": name,
@@ -360,7 +371,7 @@ def main() -> int:
     print(f"\n  matching against {len(companies):,} companies from {src}")
 
     matches = match_companies(companies, formd)
-    good = [m for m in matches if m["confidence"] in ("high", "unverified-state")]
+    good = [m for m in matches if m["confidence"] in TRUSTED_CONFIDENCE]
 
     # cache keyed by normalised name, only trustworthy matches
     cache = {m["key"]: {k: v for k, v in m.items() if k != "key"} for m in good}
@@ -372,8 +383,8 @@ def main() -> int:
         "companies in datasource": len(companies),
         "Form D companies indexed": len(formd),
         "matches (all)": len(matches),
-        "matches kept (high / unverified state)": len(good),
-        "matches rejected (state mismatch / generic name)": len(matches) - len(good),
+        "matches kept": len(good),
+        "matches rejected (suspect)": len(matches) - len(good),
         "matched companies with NO Capital IQ revenue": len(filled),
         "total raised across kept matches (USD)":
             float(sum(m["last_raise_usd"] or 0 for m in good)),
