@@ -210,6 +210,18 @@ def aggregate(df: pd.DataFrame) -> dict:
         rev_ranges = [r for r in g["REVENUERANGE"]
                       if r and str(r).strip() not in
                       ("", "nan", "Decline to Disclose", "Not Applicable")]
+
+        # Money raised per calendar year. A single lifetime total hides the
+        # difference between a company still raising and one that stopped
+        # years ago, and this is the column that lets that be checked by eye
+        # rather than taken on trust. Mirrors sbir_by_year.
+        by_year = {}
+        for _, r in g.iterrows():
+            amt = _money(r["amount"])
+            if amt:
+                y = r["filed"].year
+                by_year[y] = by_year.get(y, 0.0) + amt
+
         out[key] = {
             "entity_name": latest["ENTITYNAME"],
             "cik": latest.get("CIK"),
@@ -221,6 +233,8 @@ def aggregate(df: pd.DataFrame) -> dict:
             "last_raise_date": latest["filed"].isoformat(),
             "last_raise_year": latest["filed"].year,
             "largest_raise_usd": float(max(amounts)) if amounts else None,
+            "by_year": "; ".join(f"{y}:${by_year[y]/1e6:.2f}M"
+                                 for y in sorted(by_year, reverse=True)),
             "industry_group": latest.get("INDUSTRYGROUPTYPE"),
             "revenue_range": rev_ranges[-1] if rev_ranges else None,
             "accession": latest.get("ACCESSIONNUMBER"),
@@ -264,7 +278,9 @@ def match_companies(companies: pd.DataFrame, formd: dict) -> list:
             "filings": rec["filings"],
             "last_raise_usd": rec["last_raise_usd"],
             "last_raise_date": rec["last_raise_date"],
+            "last_raise_year": rec["last_raise_year"],
             "total_raised_usd": rec["total_raised_usd"],
+            "by_year": rec["by_year"],
             "largest_raise_usd": rec["largest_raise_usd"],
             "revenue_range": rec["revenue_range"],
             "industry_group": rec["industry_group"],
