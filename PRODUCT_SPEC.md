@@ -45,8 +45,8 @@ drop** workflow:
 ## 3. The v2 architecture
 
 v2 inverts the data flow: instead of one screening file per professor,
-there is **one static company datasource** (Capital IQ extract for CT/MA/RI,
-refreshed occasionally) and a **Faculty Database** (one row per professor
+there is **one static company datasource** (a Capital IQ extract, refreshed
+occasionally) and a **Faculty Database** (one row per professor
 with a `Flag` column: `N` = not yet matched, `Y` = matched). The system
 matches every flagged professor against the shared universe.
 
@@ -276,24 +276,44 @@ after a source step has refreshed a cache. Running it unnecessarily is
 harmless: it rebuilds identically in seconds, entirely from cache, with no
 API spend.
 
-### 4.2 Funding and track-record sources
+### 4.2 Company enrichment from public datasets
 
-Capital IQ leaves revenue blank for **1,762 of 2,477** companies — almost
-all of them private. Four public datasets fill parts of that gap. Each has
-its own reader, its own cache and its own review sheet, so they refresh
-independently and a problem in one never forces a rebuild of the others.
+Capital IQ describes companies well but leaves the fields that matter most
+for a partnership decision thin or empty. Revenue is blank for most private
+companies. Employee counts are often missing. Nothing in it says whether a
+company has ever funded academic research, worked with a university, or
+spends anything on R&D.
 
-| Source | Answers | Reach |
+So before faculty matching runs, the company dataset is enriched from
+public datasets that fill those gaps. This happens in two parts:
+
+1. **Source steps** — one script per dataset. Each reads its dataset,
+   matches it to our companies, and writes what it found to `data/cache/`.
+   They run independently and on their own schedules.
+2. **Assembly** — `enrich_companies.py` reads the raw datasource plus every
+   cache and rebuilds `companies_enriched.xlsx`. It is the only thing that
+   writes that file.
+
+A source step never writes the enriched workbook, and the workbook is
+always a full rebuild rather than a merge, so it cannot drift from the
+datasource or keep stale rows. If a cache does not exist yet, its columns
+come out blank and nothing breaks — there is no required run order.
+
+#### The datasets
+
+| Dataset | What it covers | What it adds |
 |---|---|---|
-| **SEC Form D** | did investors put private capital in, how much, when | 325 companies, 225 with no CIQ revenue |
-| **SBIR/STTR** | did the federal government pay them to do research | 391 companies, 287 with no CIQ revenue |
-| **SEC XBRL** | how much do they spend on R&D | ~176 public companies |
-| **OpenAlex** | do they publish research or fund academic work | not yet matched |
+| **SEC Form D** | any US company raising private capital, in any sector | dated amounts raised, from the company's own filing |
+| **SBIR/STTR** | federal R&D awards to small businesses, all agencies | dated award amounts, agency, award phase, employee counts, and the university partner named on each STTR award |
+| **SEC XBRL company facts** | reported financials for any public company, whatever the industry | R&D expense — research intensity, which revenue does not show |
+| **OpenAlex** | published research and research funders worldwide | whether a company publishes research or has funded academic work |
 
-Form D and SBIR barely overlap — only 65 companies match both — because
-grant money is not a securities offering, so a company living on SBIR
-awards files no Form D at all. Together they cover **452 of the 1,762
-companies Capital IQ knows nothing about (26%)**.
+The first three are complementary rather than overlapping. Form D covers
+companies raising private capital; SBIR covers companies the government
+pays to do research — and grant money is not a securities offering, so a
+company living on federal awards files no Form D at all. XBRL covers only
+public companies, which are the ones Capital IQ already describes well, so
+it adds a different signal rather than more coverage.
 
 #### Matching companies across sources
 
@@ -301,26 +321,25 @@ Every source joins to the Capital IQ list through `nexus/matching.py`, so
 the rule is written once and improving it improves all of them.
 
 Names are normalised before comparison — lowercased, punctuation and legal
-suffixes stripped — so `AERODYNE RESEARCH INC` and `Aerodyne Research, Inc.`
-both become `aerodyne research`. An exact match on that key is the starting
-point, never the conclusion: company names are not unique.
+suffixes stripped — so the same company spelled several ways collapses to
+one key. An exact match on that key is the starting point, never the
+conclusion: company names are not unique.
 
 What settles it is the **website**. A domain is a registered identifier a
-company keeps through a move and a rename, so:
+company keeps through a relocation and usually through a rename:
 
 - website agrees → same company, whatever the address says
 - website disagrees → different companies
 - nothing to compare → the name match stands on its own
 
 **A differing address is not evidence.** Sources record the address as at
-the time of the record — SBIR stamps a 1998 award with a 1998 address and
-never revisits it. Alexion is in Massachusetts and its older records say
-Connecticut because it moved after the last one. An earlier version rejected
-on this and discarded 35 real companies.
+the time of the record and never revisit it, so any company that has moved
+will disagree with its own older records. An earlier version rejected
+matches on this and discarded a substantial number of real companies.
 
-SBIR also falls back to matching on website when the name does not match,
-which finds eight companies that renamed themselves — Antigenics became
-Agenus, ProterixBio was BioScale, KALA BIO was Kala Pharmaceuticals.
+Where a dataset carries websites, matching also falls back to the domain
+when the name does not match — which finds companies that renamed
+themselves, something no name rule can reach.
 
 ## 5. Scoring model reference
 
@@ -337,91 +356,95 @@ All weights and thresholds are `config.yaml` values.
 
 ## 6. Known limitations
 
-### Matching
+### Matching companies between datasets
 
 - Matching is exact-after-normalisation, not fuzzy. A misspelling, or a
   rename with no shared website, is a miss. This is deliberate: a wrong
-  match silently attributes another company's money, which is worse.
-- **Three companies are excluded** as unresolvable: `Casimir, LLC`
-  (casimirtrials.com here, casimirspace.com in SBIR — different companies
-  sharing a name), and `Imt, LLC` and `EMD Holding Corp.`, three-letter
-  names with nothing to corroborate them.
-- The datasource contains roughly ten duplicate companies — the same firm
-  under two names, e.g. `Abbratech, Inc.` and `AbbraTech Holdings LLC`. They
-  match the same external record, which is correct, but both appear in a
-  faculty's results.
-- **No address fallback**, though it would add 215 matches. 2,035 of the
-  25,094 addresses in the SBIR file host more than one company (one hosts
-  32) because biotech firms cluster in shared incubators. It would hand a
-  company its neighbours' grants.
-- **No previous-name fallback for Form D**, though the file offers six such
-  columns and they would add 22 matches. Those record legal continuity, not
-  business continuity: most are reverse mergers where a shell takes on a
-  different business. Six have both names in the datasource (Arsanis and X4
-  Pharmaceuticals), so following them would attribute one raise to two
-  companies.
+  match silently attributes another company's money, which is worse than
+  missing one.
+- A small number of companies cannot be resolved either way — typically
+  very short or initial-based names, where two unrelated companies can
+  plausibly share a name and nothing else is available to separate them.
+  These are excluded from the caches but kept in the review workbooks.
+- Duplicate companies in the datasource — the same firm listed under two
+  names — match the same external record. That is correct, but both rows
+  can appear in one faculty's results.
+- **Address is not used as a fallback**, though it would add matches.
+  Companies cluster in shared incubators and office parks, so a single
+  address routinely hosts many unrelated firms; matching on it would hand a
+  company its neighbours' funding.
+- **Previous-name fields are not used as a fallback**, though Form D
+  provides them. They record legal continuity, not business continuity: a
+  shell company can be taken over and change business entirely while
+  keeping its filing history. Where both the old and new names are in the
+  datasource, following them would attribute one raise to two companies.
 
-### Funding data
+### What the funding numbers do and do not mean
 
-- **A lifetime total is not spending capacity.** Inotek Pharmaceuticals
-  shows $38.4m of SBIR awards, all of it between 1997 and 2005 and long
-  spent. The `_recent_usd` columns (5-year window) represent capacity; the
-  `_total_usd` columns are reference only.
-- **Most SBIR history is old.** Only 140 of 391 matched companies have an
-  award in the last five years; 140 last won one before 2015. SBIR
-  contributes far more to track record than to current capacity.
-- **`funding_total_usd` mixes two kinds of dollar.** A federal grant is
-  reimbursement for work on a specific project; a Series A is equity in the
-  bank. The combined figure is coarse by nature — fine for a 0.10 weight,
-  but the per-source columns are what to trust.
-- **The Form D window starts in 2023** because that is what was downloaded,
-  not a limit of the data. Rounds before then are missing — Centrexion's
-  $67m Series D, for example. The SEC publishes quarters back to 2009.
+- **A lifetime total is not spending capacity.** Money awarded decades ago
+  was spent decades ago. The `_recent_usd` columns represent current
+  capacity; the `_total_usd` columns are reference and audit only.
+- **Most federal award history is old.** Only a minority of matched
+  companies have won an award recently. This data contributes far more to
+  track record than to current capacity.
+- **The combined funding figure mixes two kinds of dollar.** A federal
+  grant is reimbursement for work on a specific project; an equity raise is
+  cash in the bank. The combined number is coarse by nature — acceptable
+  for a low-weighted score, but the per-source columns are what to trust.
+- Award amounts are booked in the year the paperwork lands, not the year
+  the money is spent. Multi-year contracts therefore look lumpy, which is
+  why recency uses a multi-year window rather than the latest year alone.
 
-### Coverage gaps
+### Coverage gaps in the source data
 
-- **`university_current` names only 2 companies.** `Contract End Date` is
-  filled for 49% of awards, and most university ties in the data ended
-  between 2016 and 2024. The column can say *yes* confidently but never
-  *no*. `university_past` (83 companies) is the useful one.
-- `RI Name` is filled for only 9.8% of awards once placeholders are
-  removed — the literal string `Stub` accounts for 41% of that column. A
-  blank means "no STTR award", not "no university ties".
-- SBIR fills `Company Website` for 55.9% of awards, so the website check —
-  the strongest signal available — cannot run on nearly half the data.
-- **SEC XBRL reaches ~176 companies, nearly all of which already have
-  revenue.** It adds a better signal (research intensity) on companies
-  already known, not coverage of unknown ones.
-- The Capital IQ export is screened to a single industry, so the industry
-  column is constant across all 2,477 rows. The agency-to-industry mapping
-  in `enrich_sbir.py` is built but cannot be tuned until the datasource
-  spans more industries.
+- Several fields these datasets offer are only partly filled. Where a field
+  is missing, it means *unknown*, never *no* — a blank university end date
+  does not mean the collaboration ended, and a company with no recorded
+  award is not necessarily unfunded.
+- Because of that, the "current university partnership" signal can confirm
+  a live collaboration but can never rule one out, and will always
+  under-report. The historical partnership list is the more complete field.
+- The university partner is only recorded on STTR awards, which are a
+  minority of federal awards. Its absence says nothing about a company's
+  academic ties in general.
+- Placeholder values appear where real values should be — literal strings
+  standing in for a missing name. These are filtered, but the filter list
+  is maintained by hand and a new placeholder would pass through.
+- SEC XBRL covers only public companies, which are the ones Capital IQ
+  already describes well. It improves the signal on companies already
+  known rather than reaching unknown ones.
+- Where the datasource is screened to a single industry, industry-based
+  logic cannot be tuned or tested. The agency-to-industry mapping is built
+  and ready but unexercised until the datasource spans more sectors.
 
-### Deliberately not used
+### Approaches tested and rejected
 
-- **Web search for funding figures.** Tested on four companies: structured
-  funding databases are paywalled, and search returns confident,
-  relevant-looking results about *different* companies. Asked how much
-  Pelias Technologies raised, the results offered Egalet's $27.6m. A
-  dataset fails loudly when a company is absent; search fails silently.
-- **The USAspending database subset.** Its award table covers 2025–2026
-  only, and the per-recipient totals are last-12-months, so companies with
-  decades of federal awards read as $0.
+- **Web search for funding figures.** Structured funding databases are
+  paywalled, and search returns confident, relevant-looking results about
+  *different* companies — one test asked for a small company's funding and
+  the results supplied another firm's round. A dataset fails loudly when a
+  company is absent; search fails silently, which at datasource scale
+  cannot be caught by hand.
+- **Bulk government spending databases.** The full archive requires
+  terabytes of storage and a database server; the published subset covers
+  only the most recent year, so companies with long award histories read as
+  zero. The per-company API remains a viable option and is unexplored.
 
 ### Scoring and pipeline
 
-- LLM scores use a single `gpt-5-nano` call with no web search; obscure
-  companies may score "NA" (excluded from normalisation, never falsely
-  boosted).
+- LLM scores use a single small-model call with no web search; obscure
+  companies may score "NA", which is excluded from normalisation rather
+  than treated as a low score.
 - The embedding pre-filter is the one lossy step: a match invisible in a
   company's description can be dropped before LLM scoring. Mitigated by a
-  generous cutoff (300), configurable up to "score everything".
-- Award titles and abstracts are collected but **not** used to enrich
-  company descriptions. Doing so would change `company_embedding_text()`
-  and therefore which companies reach the LLM for every faculty member —
-  a matching change, not an additive one, and it needs its own measurement.
-- Nominatim geocoding is rate-limited (~1/sec), so the first enrichment of
-  a large datasource takes hours. Once.
+  generous cutoff, configurable up to "score everything".
+- Award titles and abstracts are collected but **not** yet used to enrich
+  company descriptions. Doing so would change the text the pre-filter
+  embeds, and therefore which companies reach the LLM for every faculty
+  member — a change to matching behaviour rather than an added column, and
+  it needs its own measurement before being adopted.
+- Geocoding is rate-limited, so the first enrichment of a large datasource
+  takes hours. Once — after that it is cached.
 - Writes fail if the target file is open in Excel; the program says so
   plainly and the caches make re-running free.
 
