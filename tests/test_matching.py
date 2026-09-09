@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import unittest
 
-from nexus.matching import (TRUSTED_CONFIDENCE, is_too_generic,
-                            match_confidence, normalise_company_name,
-                            state_code, state_from_address, website_domain)
+from nexus.matching import (TRUSTED_CONFIDENCE, domains_related,
+                            is_too_generic, match_confidence,
+                            normalise_company_name, state_code,
+                            state_from_address, website_domain)
 
 
 class TestNormaliseCompanyName(unittest.TestCase):
@@ -108,6 +109,40 @@ class TestWebsiteDomain(unittest.TestCase):
         self.assertEqual(website_domain("https://user@acme.com:8080/x"), "acme.com")
 
 
+class TestDomainsRelated(unittest.TestCase):
+    """Both cases below are real rows from the SBIR match."""
+
+    def test_suffixed_domain_is_the_same_company(self):
+        """nflectionrx.com redirects to nflection.com - one company."""
+        self.assertTrue(domains_related("nflection.com", "nflectionrx.com"))
+        self.assertTrue(domains_related("nflectionrx.com", "nflection.com"))
+
+    def test_shared_prefix_alone_is_not_enough(self):
+        """casimirtrials.com runs clinical trials; casimirspace.com builds
+        space hardware. They share 'casimir' and nothing else."""
+        self.assertFalse(domains_related("casimirtrials.com",
+                                         "casimirspace.com"))
+
+    def test_identical(self):
+        self.assertTrue(domains_related("aprea.com", "aprea.com"))
+
+    def test_same_stem_different_tld(self):
+        self.assertTrue(domains_related("aprea.com", "aprea.io"))
+        self.assertTrue(domains_related("aprea.com", "aprea.co.uk"))
+
+    def test_short_stems_prove_nothing(self):
+        """'bio' inside 'biotech' must not merge two companies."""
+        self.assertFalse(domains_related("bio.com", "biotech.com"))
+
+    def test_unrelated(self):
+        self.assertFalse(domains_related("acme.com", "globex.com"))
+
+    def test_missing_values(self):
+        self.assertFalse(domains_related(None, "acme.com"))
+        self.assertFalse(domains_related("acme.com", None))
+        self.assertFalse(domains_related(None, None))
+
+
 class TestMatchConfidence(unittest.TestCase):
     """The rule that decides whether an external record is believed."""
 
@@ -145,6 +180,15 @@ class TestMatchConfidence(unittest.TestCase):
             match_confidence("advanced rna technologies",
                              our_domain="advirna.com",
                              their_domains={"advirna.com"}),
+            "high")
+
+    def test_related_domain_rescues_a_state_disagreement(self):
+        """NFlection: MA here, PA in SBIR, nflectionrx.com vs nflection.com.
+        Same company - a suffixed domain must not read as a mismatch."""
+        self.assertEqual(
+            match_confidence("nflection therapeutics", our_state="MA",
+                             their_state="PA", our_domain="nflectionrx.com",
+                             their_domains={"nflection.com"}),
             "high")
 
     def test_both_signals_disagreeing_is_suspect(self):

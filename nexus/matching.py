@@ -208,6 +208,58 @@ def website_domain(url: Optional[str]) -> Optional[str]:
     return s or None
 
 
+_TLDS = ("co.uk", "com.au", "co.in", "com", "net", "org", "io", "ai", "bio",
+         "us", "co", "inc", "life", "health", "tech", "science")
+
+#: Below this, a shared domain stem proves nothing - "bio.com" and
+#: "biotech.com" are not evidence of the same company.
+_MIN_STEM = 5
+
+
+def _domain_stem(domain: str) -> str:
+    """The distinctive label of a domain, without www or the TLD.
+
+        "nflectionrx.com"  ->  "nflectionrx"
+        "aprea.co.uk"      ->  "aprea"
+    """
+    s = domain.lower().strip(".")
+    for tld in _TLDS:
+        if s.endswith("." + tld):
+            s = s[: -(len(tld) + 1)]
+            break
+    return s.rsplit(".", 1)[-1]
+
+
+def domains_related(a: Optional[str], b: Optional[str]) -> bool:
+    """True when two domains plausibly belong to the same company.
+
+    Companies routinely run more than one domain, and a plain string
+    comparison calls those a mismatch. Two real cases from the SBIR match:
+
+        nflection.com  /  nflectionrx.com   SAME - the second redirects to
+                                            the first; "rx" is a suffix on
+                                            the same stem
+        casimirtrials.com / casimirspace.com  DIFFERENT - a clinical trials
+                                            company and a space company
+                                            that happen to share "casimir"
+
+    So the test is containment, not a shared prefix: one stem must contain
+    the whole of the other. "nflection" is inside "nflectionrx", whereas
+    neither "casimirtrials" nor "casimirspace" contains the other.
+    """
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    sa, sb = _domain_stem(a), _domain_stem(b)
+    if not sa or not sb:
+        return False
+    if sa == sb:
+        return True                       # same stem, different TLD
+    short, long = (sa, sb) if len(sa) <= len(sb) else (sb, sa)
+    return len(short) >= _MIN_STEM and short in long
+
+
 #: Confidence levels whose data is trustworthy enough to reach a cache.
 #: "suspect" is deliberately excluded - it is kept in the review sheet so a
 #: human can look, but its money is never attributed to a company.
@@ -235,7 +287,10 @@ def match_confidence(key: str,
     "suspect". Companies move; sources freeze the old address.
     """
     their_domains = {d for d in (their_domains or []) if d}
-    domain_agrees = bool(our_domain and our_domain in their_domains)
+    # Related, not identical: a company may run nflection.com and
+    # nflectionrx.com. See domains_related().
+    domain_agrees = bool(our_domain and any(domains_related(our_domain, d)
+                                            for d in their_domains))
     domain_differs = bool(our_domain and their_domains and not domain_agrees)
 
     if domain_agrees:
