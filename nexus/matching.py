@@ -134,3 +134,125 @@ def state_from_address(address: Optional[str]) -> Optional[str]:
         if m.group(1) in valid:
             best = m.group(1)
     return best
+
+
+# ----------------------------------------------------------------------
+# Corroborating a name match
+#
+# An exact normalised-name match is never proof on its own: company names
+# are not unique, so "Peptech Corp." in our list and "Peptech Corp." in an
+# external file could be two unrelated businesses. Something independent
+# has to agree before the match is trusted.
+#
+# The evidence is asymmetric, and getting that wrong cost us real matches:
+#   agreement    is strong    - two records independently placing the same
+#                               name in the same state is a real confirmation
+#   disagreement is WEAK      - companies relocate, and sources record the
+#                               address as at the time of the record. SBIR
+#                               stamps the address of a 1998 award and never
+#                               revisits it.
+#
+# Measured on 380 SBIR name matches: 37 disagreed on state, and 12 of those
+# had an IDENTICAL website domain on both sides - the same company after a
+# move (BrightSpec MA/VA both brightspec.com; Aprea MA/PA both aprea.com).
+# So a state disagreement must not veto a match. Only a website that
+# genuinely differs is evidence against.
+# ----------------------------------------------------------------------
+
+_VALID_CODES = set(_STATE_ABBR.values())
+
+
+def state_code(value: Optional[str]) -> Optional[str]:
+    """Normalise one state value to its two-letter code.
+
+    Sources disagree on spelling: SEC Form D stores "MA", SBIR stores
+    "Massachusetts". Both must become "MA" before they can be compared.
+    """
+    if not value:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    if len(s) == 2 and s.upper() in _VALID_CODES:
+        return s.upper()
+    return _STATE_ABBR.get(s.lower())
+
+
+_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*://", re.I)
+_LEADING_WWW = re.compile(r"^www\d?\.", re.I)
+
+
+def website_domain(url: Optional[str]) -> Optional[str]:
+    """Reduce a URL to a bare comparable domain, or None if unusable.
+
+        "https://www.Acme.com/about?x=1"  ->  "acme.com"
+        "acme.com"                        ->  "acme.com"
+        "-"                               ->  None
+
+    A domain outlives an address: a company that moves states keeps its
+    website, which is exactly what makes this the tie-breaker when the
+    states disagree.
+    """
+    if url is None:
+        return None
+    s = str(url).strip().lower()
+    if s in ("", "-", "nan", "none", "n/a", "na"):
+        return None
+    s = _SCHEME.sub("", s)
+    s = s.split("/")[0].split("?")[0].split("#")[0]
+    s = s.split("@")[-1].split(":")[0]        # drop any user@ or :port
+    s = _LEADING_WWW.sub("", s).strip(".")
+    # a bare word is not a domain
+    if "." not in s or len(s) < 4:
+        return None
+    return s or None
+
+
+#: Confidence levels whose data is trustworthy enough to reach a cache.
+#: "suspect" is deliberately excluded - it is kept in the review sheet so a
+#: human can look, but its money is never attributed to a company.
+TRUSTED_CONFIDENCE = ("high", "unverified")
+
+
+def match_confidence(key: str,
+                     our_state: Optional[str] = None,
+                     their_state: Optional[str] = None,
+                     our_domain: Optional[str] = None,
+                     their_domains=None) -> str:
+    """Grade a name match using whatever corroboration is available.
+
+    `their_states`/`their_domains` may hold several values, because an
+    external source can carry decades of records for one company under
+    several addresses and websites. Agreement with ANY of them counts.
+
+    Returns:
+      high        an independent field agrees - same state, or same website
+      unverified  nothing to compare against, but the name is distinctive
+      suspect     the only comparable evidence actively disagrees, or the
+                  name is generic and nothing corroborates it
+
+    Note what is NOT here: a state disagreement alone does not produce
+    "suspect". Companies move; sources freeze the old address.
+    """
+    their_domains = {d for d in (their_domains or []) if d}
+    domain_agrees = bool(our_domain and our_domain in their_domains)
+    domain_differs = bool(our_domain and their_domains and not domain_agrees)
+
+    if domain_agrees:
+        return "high"                     # strongest evidence available
+
+    their_states = their_state if isinstance(their_state, (set, list, tuple)) \
+        else ([their_state] if their_state else [])
+    their_states = {s for s in their_states if s}
+    if our_state and their_states:
+        if our_state in their_states:
+            return "high"
+        if domain_differs:
+            return "suspect"              # state AND website both disagree
+        return "unverified"               # probably relocated - keep, flag
+
+    if domain_differs:
+        return "suspect"
+    if is_too_generic(key):
+        return "suspect"
+    return "unverified"

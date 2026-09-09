@@ -19,6 +19,7 @@ SUITES = [
     ("Scoring math", "tests.test_scoring"),
     ("Excel read/write", "tests.test_data_io"),
     ("Pre-filter & geocoding", "tests.test_prefilter"),
+    ("Company-name matching", "tests.test_matching"),
     ("End-to-end pipeline", "tests.test_pipeline"),
 ]
 
