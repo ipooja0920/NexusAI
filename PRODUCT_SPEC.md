@@ -337,9 +337,33 @@ the time of the record and never revisit it, so any company that has moved
 will disagree with its own older records. An earlier version rejected
 matches on this and discarded a substantial number of real companies.
 
-Where a dataset carries websites, matching also falls back to the domain
-when the name does not match — which finds companies that renamed
-themselves, something no name rule can reach.
+#### What each dataset offers for matching
+
+Not every dataset carries the same identifying fields, so the same rule
+does different amounts of work depending on the source:
+
+| Dataset | Name | Address | Website | How it is matched |
+|---|---|---|---|---|
+| **SEC Form D** | ✓ | ✓ | — | name only, corroborated by state |
+| **SBIR/STTR** | ✓ | ✓ | partly filled | name, falling back to website |
+| **SEC XBRL** | ✓ | — | — | ticker → CIK, an exact identifier |
+| **OpenAlex** | ✓ | region only | homepage | name, falling back to website |
+
+Two consequences worth being explicit about:
+
+**Form D is matched on name alone.** Its filings carry an address but no
+website, so there is no domain to corroborate a match or to fall back on.
+A company that renamed itself between the filing and the datasource is
+simply a miss there — where in a dataset with websites it would still be
+found. Form D does publish previous-name fields, but those record legal
+rather than business continuity and are deliberately not used (see §6).
+
+**SEC XBRL does not use this matcher at all.** Public companies carry a
+ticker in the Capital IQ name, and SEC publishes a ticker-to-CIK map, so
+the join is an exact identifier lookup with no name comparison and no
+ambiguity. That is the strongest form of matching available, and it is
+possible only because both sides share a registered identifier — which is
+exactly what private companies lack.
 
 ## 5. Scoring model reference
 
