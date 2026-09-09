@@ -219,8 +219,9 @@ class TempProject:
         ws.title = "Screening"
         ws["A6"] = "Capital IQ Company Screening Report > TEST FIXTURE"
         headers = {"A": "Company Name", "C": "Number of Employees - Global (Latest)",
-                   "D": "Revenue ($USDmm)", "G": "Offices",
-                   "I": "Business Description", "J": "Website"}
+                   "D": "Revenue ($USDmm)", "E": "Company Type", "G": "Offices",
+                   "I": "Business Description", "J": "Website",
+                   "K": "Industry Classifications"}
         for col, text in headers.items():
             ws[f"{col}8"] = text
         for i, (name, emp, rev, addr, desc, web) in enumerate(self.companies):
@@ -228,9 +229,11 @@ class TempProject:
             ws[f"A{r}"] = name
             ws[f"C{r}"] = emp
             ws[f"D{r}"] = rev
+            ws[f"E{r}"] = "Public Company" if i % 3 == 0 else "Private Company"
             ws[f"G{r}"] = f"Headquarters\n{addr}\nUnited States\nMain Phone: 555-0100"
             ws[f"I{r}"] = desc
             ws[f"J{r}"] = web
+            ws[f"K{r}"] = "Pharmaceuticals, Biotechnology and Life Sciences (Primary)"
         wb.save(self.dir / "data" / "input" / "companies_raw.xlsx")
 
     def _write_faculty(self):

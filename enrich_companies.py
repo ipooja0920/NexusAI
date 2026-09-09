@@ -21,7 +21,9 @@ import time
 
 from nexus.cache import Caches, _text_key
 from nexus.excel_io import read_capitaliq, write_enriched
+from nexus.funding import funding_columns, load_caches, summarise
 from nexus.geo import Geocoder, clean_address_block, distance_miles, select_address_block
+from nexus.matching import normalise_company_name
 from nexus.prefilter import company_embedding_text, embed_text
 from nexus.scoring import (distance_score, employee_score, parse_employees,
                            parse_revenue, revenue_score)
@@ -62,6 +64,16 @@ def main() -> int:
             rate_limit_seconds=cfg.geocoding["rate_limit_seconds"],
             caches=caches,
         )
+
+    # Funding caches, written by the source steps (enrich_funding.py,
+    # enrich_sbir.py). Read-only here. A missing cache leaves its columns
+    # blank rather than failing, so there is no required run order.
+    funding = load_caches(cfg.cache_dir)
+    if funding:
+        print(f"Funding caches found: {', '.join(sorted(funding))}\n")
+    else:
+        print("No funding caches found - those columns will be blank.\n"
+              "  Run enrich_funding.py / enrich_sbir.py first to populate them.\n")
 
     reference = cfg.geocoding["reference_point"]
     comp_cfg = cfg.components
@@ -104,11 +116,13 @@ def main() -> int:
                 emb_key = _text_key(text)
                 stats["emb_cached" if was_cached else "embedded"] += 1
 
-        records.append({
+        record = {
             "company": company,
             "website": row["website"],
             "description": row["description"],
             "address_cleaned": cleaned,
+            "company_type": row.get("company_type"),
+            "industry": row.get("industry"),
             "latitude": lat, "longitude": lon,
             "geocode_provider": provider,
             "distance_miles": dist,
@@ -118,7 +132,19 @@ def main() -> int:
             "employee_score": round(e_score, 6),
             "revenue_score": round(r_score, 6),
             "embedding_key": emb_key,
-        })
+        }
+        # Funding is a lookup, not a computation - the source steps already
+        # did the matching and wrote the answer to a cache.
+        record.update(funding_columns(normalise_company_name(company), funding))
+
+        # SBIR often knows a headcount where Capital IQ does not. Fill only
+        # the gap; never overwrite what Capital IQ gave us.
+        if not record["employees"] and record.get("sbir_employees"):
+            record["employees"] = record["sbir_employees"]
+            record["employee_score"] = round(
+                employee_score(record["employees"], comp_cfg["employee_cap"]), 6)
+
+        records.append(record)
 
         done = i + 1
         if done % 25 == 0 or done == n:
@@ -132,7 +158,11 @@ def main() -> int:
     print(f"Geocoding: {stats['geocoded']} new, {stats['cached']} from cache, "
           f"{stats['failed']} failed")
     print(f"Embeddings: {stats['embedded']} new, {stats['emb_cached']} from cache")
-    print(f"Done in {time.time()-t0:.0f}s.")
+    if funding:
+        print("\nFunding join:")
+        for k, v in summarise(records).items():
+            print(f"  {k:<38}{v:>8,}")
+    print(f"\nDone in {time.time()-t0:.0f}s.")
     return 0
 
 

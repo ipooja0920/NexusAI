@@ -29,9 +29,11 @@ capitaliq:
   col_company: A
   col_employees: C
   col_revenue: D        # $USDmm
+  col_company_type: E   # "Public Company" / "Private Company"
   col_address: G        # "Offices" block
   col_description: I
   col_website: J
+  col_industry: K       # "Industry Classifications"
 
 # --------- Faculty Database layout -----------------------------------
 faculty:

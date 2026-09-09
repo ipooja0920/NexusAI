@@ -19,6 +19,18 @@ HEADER_FONT = Font(color="FFFFFF", bold=True)
 # Capital IQ raw export
 # ======================================================================
 
+def _sheet_width(path: Path) -> Optional[int]:
+    """How many columns the first sheet actually has, or None if unreadable."""
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True)
+        try:
+            return wb.worksheets[0].max_column
+        finally:
+            wb.close()
+    except Exception:                                          # noqa: BLE001
+        return None
+
+
 def read_capitaliq(path: Path, cfg: dict) -> pd.DataFrame:
     """Read the raw Capital IQ screening export into a tidy DataFrame."""
     if not path.exists():
@@ -26,15 +38,34 @@ def read_capitaliq(path: Path, cfg: dict) -> pd.DataFrame:
             f"Company datasource not found at {path}. Place your Capital IQ "
             "export there (or update paths.companies_raw in config.yaml)."
         )
-    usecols = ",".join([
-        cfg["col_company"], cfg["col_employees"], cfg["col_revenue"],
-        cfg["col_address"], cfg["col_description"], cfg["col_website"],
-    ])
+    # pandas returns usecols in SHEET order however they are listed, so the
+    # field names must be sorted by column letter or they silently attach to
+    # the wrong data. Optional columns are skipped when a config written
+    # before they existed does not name one.
+    wanted = [
+        ("col_company", "company"), ("col_employees", "employees"),
+        ("col_revenue", "revenue"), ("col_company_type", "company_type"),
+        ("col_address", "address"), ("col_description", "description"),
+        ("col_website", "website"), ("col_industry", "industry"),
+    ]
+    present = [(str(cfg[k]).upper(), name) for k, name in wanted if cfg.get(k)]
+    present.sort(key=lambda kv: (len(kv[0]), kv[0]))          # A..Z, then AA..
+
+    # An export narrower than the config expects would raise an unhelpful
+    # "out-of-bounds indices" error from pandas, so configured columns past
+    # the end of the sheet are dropped and their fields left blank.
+    width = _sheet_width(path)
+    if width:
+        present = [(l, n) for l, n in present if column_index_from_string(l) <= width]
+
+    usecols = ",".join(letter for letter, _ in present)
+    names = [name for _, name in present]
+
     df = pd.read_excel(
         path, header=None, skiprows=cfg["data_start_row"] - 1,
         usecols=usecols, engine="openpyxl", dtype=str,
     )
-    df.columns = ["company", "employees", "revenue", "address", "description", "website"]
+    df.columns = names
 
     def _clean(v) -> Optional[str]:
         """None / NaN / blank -> None; everything else -> stripped string."""
@@ -46,18 +77,16 @@ def read_capitaliq(path: Path, cfg: dict) -> pd.DataFrame:
         return s
 
     rows = []
-    for tup in df.itertuples(index=False, name=None):
-        company = _clean(tup[0])
+    for rec in df.to_dict("records"):
+        company = _clean(rec.get("company"))
         if company is None:
             break  # stop at first blank company row (footer follows)
-        rows.append({
-            "company": company,
-            "employees": _clean(tup[1]),
-            "revenue": _clean(tup[2]),
-            "address": _clean(tup[3]),
-            "description": _clean(tup[4]),
-            "website": _clean(tup[5]),
-        })
+        row = {name: _clean(rec.get(name)) for name in names}
+        row["company"] = company
+        # keep the shape stable whether or not the optional columns exist
+        row.setdefault("company_type", None)
+        row.setdefault("industry", None)
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -65,11 +94,15 @@ def read_capitaliq(path: Path, cfg: dict) -> pd.DataFrame:
 # Enriched companies file
 # ======================================================================
 
+from nexus.funding import FUNDING_COLUMNS  # noqa: E402
+
 ENRICHED_COLUMNS = [
     "company", "website", "description", "address_cleaned",
+    "company_type", "industry",
     "latitude", "longitude", "geocode_provider", "distance_miles",
     "employees", "revenue_usdmm",
     "distance_score", "employee_score", "revenue_score",
+] + FUNDING_COLUMNS + [
     "embedding_key",
 ]
 

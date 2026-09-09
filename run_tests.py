@@ -20,6 +20,7 @@ SUITES = [
     ("Excel read/write", "tests.test_data_io"),
     ("Pre-filter & geocoding", "tests.test_prefilter"),
     ("Company-name matching", "tests.test_matching"),
+    ("Funding join", "tests.test_funding_join"),
     ("End-to-end pipeline", "tests.test_pipeline"),
 ]
 
