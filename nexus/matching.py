@@ -48,6 +48,13 @@ def normalise_company_name(name: Optional[str]) -> str:
     while parts and parts[-1] in _SUFFIXES:
         parts.pop()
 
+    # "Althexis Company, The" puts the article at the END, so the leading
+    # -"the" strip above misses it. Removing the suffix first exposes it.
+    while parts and parts[-1] == "the":
+        parts.pop()
+        while parts and parts[-1] in _SUFFIXES:
+            parts.pop()
+
     return " ".join(parts).strip()
 
 

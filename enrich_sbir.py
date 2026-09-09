@@ -331,25 +331,63 @@ def summarise(a: dict, recent_years: int) -> dict:
 # Match against the company datasource
 # ----------------------------------------------------------------------
 
-def match_companies(companies: pd.DataFrame, acc: dict,
-                    recent_years: int) -> list:
+def build_domain_index(acc: dict) -> dict:
+    """domain -> the SBIR company key that owns it.
+
+    Only domains belonging to exactly one company are indexed. A domain
+    shared by two SBIR records is ambiguous, and guessing between them
+    would be exactly the kind of silent wrong attribution this whole
+    module exists to prevent.
+    """
+    owners = defaultdict(set)
+    for key, a in acc.items():
+        for dom in a["domains"]:
+            owners[dom].add(key)
+    return {d: next(iter(ks)) for d, ks in owners.items() if len(ks) == 1}
+
+
+def match_companies(companies: pd.DataFrame, acc: dict, recent_years: int,
+                    domain_index: dict) -> list:
+    """Find each company in the SBIR index, by name and then by website.
+
+    A domain survives a rename where a name obviously cannot, and eight
+    real companies here changed names between the two sources:
+
+        Antigenics, Inc.       agenusbio.com    ->  SBIR "agenus"
+        ProterixBio, Inc.      bioscale.com     ->  SBIR "bioscale"
+        KALA BIO, Inc.         kalarx.com       ->  SBIR "kala pharmaceuticals"
+
+    Deliberately NOT a third fallback on address: 2,035 of the 25,094
+    addresses in the SBIR file host more than one company (one hosts 32),
+    because biotech firms cluster in shared incubators. Matching on
+    address would hand a company its neighbours' grants.
+    """
     rows = []
     for _, c in companies.iterrows():
         name = c.get("company")
+        our_domain = website_domain(c.get("website"))
+
         key = normalise_company_name(name)
         a = acc.get(key)
+        matched_by = "name"
+        if a is None and our_domain:
+            alt = domain_index.get(our_domain)
+            if alt is not None:
+                key, a, matched_by = alt, acc[alt], "website"
         if a is None:
             continue
 
         our_state = state_from_address(c.get("address_cleaned") or c.get("address"))
-        our_domain = website_domain(c.get("website"))
         their_states = set(a["states"])
         their_domains = set(a["domains"])
 
-        conf = match_confidence(key, our_state, their_states,
-                                our_domain, their_domains)
+        # A website match IS the corroboration - the domain is what found
+        # it, so there is nothing further to confirm.
+        conf = ("high" if matched_by == "website"
+                else match_confidence(key, our_state, their_states,
+                                      our_domain, their_domains))
 
-        row = {"company": name, "confidence": conf,
+        row = {"company": name, "confidence": conf, "matched_by": matched_by,
                "our_state": our_state,
                "sbir_states": "; ".join(sorted(their_states)),
                "our_website": our_domain}
@@ -366,7 +404,8 @@ def match_companies(companies: pd.DataFrame, acc: dict,
 # ----------------------------------------------------------------------
 
 REVIEW_COLUMNS = [
-    "company", "sbir_matched_name", "confidence", "our_state", "sbir_states",
+    "company", "sbir_matched_name", "confidence", "matched_by",
+    "our_state", "sbir_states",
     "our_website", "sbir_website",
     "sbir_recent_usd", "sbir_total_usd", "sbir_by_year",
     "sbir_awards", "sbir_first_year", "sbir_last_year",
@@ -446,7 +485,9 @@ def main() -> int:
         src = "companies_raw.xlsx"
     print(f"\n  matching against {len(companies):,} companies from {src}")
 
-    matches = match_companies(companies, acc, args.recent_years)
+    domain_index = build_domain_index(acc)
+    matches = match_companies(companies, acc, args.recent_years,
+                              domain_index)
     good = [m for m in matches if m["confidence"] in TRUSTED_CONFIDENCE]
 
     cache = {m["key"]: {k: v for k, v in m.items() if k != "key"} for m in good}
@@ -463,7 +504,10 @@ def main() -> int:
     stats = {
         "companies in datasource": len(companies),
         "SBIR companies indexed": len(acc),
-        "name matches (all)": len(matches),
+        "matches (all)": len(matches),
+        "  found by name": sum(1 for m in matches if m["matched_by"] == "name"),
+        "  found by website (name differed)":
+            sum(1 for m in matches if m["matched_by"] == "website"),
         **{f"  confidence: {k}": v for k, v in sorted(by_conf.items())},
         "kept in cache (high + unverified)": len(good),
         "matched with NO Capital IQ revenue": no_rev,
