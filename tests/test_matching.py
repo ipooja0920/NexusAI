@@ -105,6 +105,13 @@ class TestWebsiteDomain(unittest.TestCase):
     def test_bare_word_is_not_a_domain(self):
         self.assertIsNone(website_domain("acme"))
 
+    def test_social_and_directory_urls_are_not_company_websites(self):
+        """SBIR lists linkedin.com as Xsphera's website. Treating that as a
+        domain would make every such company appear to share a site."""
+        for junk in ("https://www.linkedin.com/company/xsphera",
+                     "facebook.com/acme", "crunchbase.com/organization/acme"):
+            self.assertIsNone(website_domain(junk))
+
     def test_port_and_userinfo_removed(self):
         self.assertEqual(website_domain("https://user@acme.com:8080/x"), "acme.com")
 
@@ -126,9 +133,28 @@ class TestDomainsRelated(unittest.TestCase):
     def test_identical(self):
         self.assertTrue(domains_related("aprea.com", "aprea.com"))
 
+    def test_real_containment_pairs(self):
+        """Every pair below is a real company in the datasource whose
+        Capital IQ website and SBIR website differ."""
+        for a, b in (("elucid.com", "elucidbio.com"),
+                     ("excision.bio", "excisionbio.com"),
+                     ("javelinbio.com", "javelinbiotech.com"),
+                     ("ginkgo.bio", "ginkgobioworks.com"),
+                     ("cytositebio.com", "cytositebiopharma.net")):
+            self.assertTrue(domains_related(a, b), f"{a} / {b}")
+
     def test_same_stem_different_tld(self):
-        self.assertTrue(domains_related("aprea.com", "aprea.io"))
-        self.assertTrue(domains_related("aprea.com", "aprea.co.uk"))
+        """Bitome is bitome.net in Capital IQ and bitome.com in SBIR."""
+        self.assertTrue(domains_related("bitome.net", "bitome.com"))
+
+    def test_subdomain_is_ignored(self):
+        """New England Biolabs: international.neb.com vs neb.com."""
+        self.assertTrue(domains_related("international.neb.com", "neb.com"))
+        self.assertTrue(domains_related("s.fdsonics.com", "fdsonics.com"))
+
+    def test_hyphen_is_punctuation_not_a_difference(self):
+        """E-TrolZ is etrolz.com in Capital IQ, e-trolz.com in SBIR."""
+        self.assertTrue(domains_related("etrolz.com", "e-trolz.com"))
 
     def test_short_stems_prove_nothing(self):
         """'bio' inside 'biotech' must not merge two companies."""

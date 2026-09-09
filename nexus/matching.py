@@ -181,6 +181,14 @@ def state_code(value: Optional[str]) -> Optional[str]:
 _SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*://", re.I)
 _LEADING_WWW = re.compile(r"^www\d?\.", re.I)
 
+#: Domains that appear in a "company website" field but identify no company.
+_NON_COMPANY_DOMAINS = {
+    "linkedin.com", "facebook.com", "twitter.com", "x.com", "instagram.com",
+    "youtube.com", "crunchbase.com", "bloomberg.com", "wikipedia.org",
+    "gmail.com", "yahoo.com", "hotmail.com", "aol.com", "outlook.com",
+    "sbir.gov", "sam.gov", "google.com", "sites.google.com",
+}
+
 
 def website_domain(url: Optional[str]) -> Optional[str]:
     """Reduce a URL to a bare comparable domain, or None if unusable.
@@ -205,6 +213,12 @@ def website_domain(url: Optional[str]) -> Optional[str]:
     # a bare word is not a domain
     if "." not in s or len(s) < 4:
         return None
+    # Some records put a social or directory profile in the website field
+    # (SBIR lists linkedin.com as Xsphera's site). That identifies nobody,
+    # and treating it as a company domain would make every such company
+    # look like it shares a website with every other.
+    if s in _NON_COMPANY_DOMAINS:
+        return None
     return s or None
 
 
@@ -217,17 +231,22 @@ _MIN_STEM = 5
 
 
 def _domain_stem(domain: str) -> str:
-    """The distinctive label of a domain, without www or the TLD.
+    """The distinctive label of a domain, without subdomain, TLD or hyphens.
 
-        "nflectionrx.com"  ->  "nflectionrx"
-        "aprea.co.uk"      ->  "aprea"
+        "nflectionrx.com"        ->  "nflectionrx"
+        "international.neb.com"  ->  "neb"        (subdomain dropped)
+        "e-trolz.com"            ->  "etrolz"     (hyphen dropped)
+
+    Hyphens go because one source writes "e-trolz.com" and the other
+    "etrolz.com" for the same company - a punctuation difference, exactly
+    like the ones normalise_company_name() already removes from names.
     """
     s = domain.lower().strip(".")
     for tld in _TLDS:
         if s.endswith("." + tld):
             s = s[: -(len(tld) + 1)]
             break
-    return s.rsplit(".", 1)[-1]
+    return s.rsplit(".", 1)[-1].replace("-", "")
 
 
 def domains_related(a: Optional[str], b: Optional[str]) -> bool:
