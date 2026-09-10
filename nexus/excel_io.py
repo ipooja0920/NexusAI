@@ -43,7 +43,8 @@ def read_capitaliq(path: Path, cfg: dict) -> pd.DataFrame:
     # the wrong data. Optional columns are skipped when a config written
     # before they existed does not name one.
     wanted = [
-        ("col_company", "company"), ("col_employees", "employees"),
+        ("col_company", "company"), ("col_ticker", "ticker"),
+        ("col_employees", "employees"),
         ("col_revenue", "revenue"), ("col_company_type", "company_type"),
         ("col_address", "address"), ("col_description", "description"),
         ("col_website", "website"), ("col_industry", "industry"),
@@ -84,8 +85,8 @@ def read_capitaliq(path: Path, cfg: dict) -> pd.DataFrame:
         row = {name: _clean(rec.get(name)) for name in names}
         row["company"] = company
         # keep the shape stable whether or not the optional columns exist
-        row.setdefault("company_type", None)
-        row.setdefault("industry", None)
+        for optional in ("ticker", "company_type", "industry"):
+            row.setdefault(optional, None)
         rows.append(row)
     return pd.DataFrame(rows)
 

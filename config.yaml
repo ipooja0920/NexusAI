@@ -27,6 +27,7 @@ capitaliq:
   header_row: 8         # row with column headers ("Company Name", ...)
   data_start_row: 9     # first data row
   col_company: A
+  col_ticker: B         # "NasdaqCM:ACET"; blank for private companies
   col_employees: C
   col_revenue: D        # $USDmm
   col_company_type: E   # "Public Company" / "Private Company"

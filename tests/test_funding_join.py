@@ -57,18 +57,29 @@ SBIR = {
 }
 
 
+XBRL = {
+    "acme therapeutics": {
+        "ticker": "ACME", "cik": 1234567,
+        "rd_expense_usd": 99_000_000.0,
+        "rd_expense_year": 2025,
+        "rd_by_year": "2025:$99.00M; 2024:$88.00M",
+    },
+}
+
+
 def _cache_dir() -> Path:
     d = Path(tempfile.mkdtemp(prefix="nexusai_funding_"))
     (d / "funding_formd.json").write_text(json.dumps(FORMD))
     (d / "funding_sbir.json").write_text(json.dumps(SBIR))
+    (d / "rd_xbrl.json").write_text(json.dumps(XBRL))
     return d
 
 
 class TestLoadCaches(unittest.TestCase):
 
-    def test_reads_both(self):
+    def test_reads_all(self):
         c = load_caches(_cache_dir())
-        self.assertEqual(set(c), {"formd", "sbir"})
+        self.assertEqual(set(c), {"formd", "sbir", "xbrl"})
 
     def test_missing_directory_is_not_an_error(self):
         """A source step that has never run must not break enrichment."""
@@ -77,12 +88,13 @@ class TestLoadCaches(unittest.TestCase):
     def test_one_cache_present(self):
         d = _cache_dir()
         (d / "funding_sbir.json").unlink()
+        (d / "rd_xbrl.json").unlink()
         self.assertEqual(set(load_caches(d)), {"formd"})
 
     def test_corrupt_cache_is_skipped_not_fatal(self):
         d = _cache_dir()
         (d / "funding_sbir.json").write_text("{not json")
-        self.assertEqual(set(load_caches(d)), {"formd"})
+        self.assertEqual(set(load_caches(d)), {"formd", "xbrl"})
 
 
 class TestFundingColumns(unittest.TestCase):
@@ -134,6 +146,20 @@ class TestFundingColumns(unittest.TestCase):
         c = funding_columns("dormant labs", self.caches)
         self.assertIsNone(c["sbir_recent_usd"])
 
+    def test_rd_expense_is_not_counted_as_funding(self):
+        """R&D spend is money going OUT. It must never inflate the funding
+        figures, which represent money coming in."""
+        c = funding_columns("acme therapeutics", self.caches)
+        self.assertEqual(c["rd_expense_usd"], 99_000_000.0)
+        self.assertEqual(c["funding_recent_usd"], 10_000_000.0)   # unchanged
+        self.assertEqual(c["funding_total_usd"], 29_000_000.0)    # unchanged
+        self.assertNotIn("XBRL", c["funding_sources"])
+
+    def test_rd_columns_blank_for_a_private_company(self):
+        c = funding_columns("dormant labs", self.caches)
+        self.assertIsNone(c["rd_expense_usd"])
+        self.assertIsNone(c["xbrl_ticker"])
+
     def test_provenance_is_carried(self):
         c = funding_columns("acme therapeutics", self.caches)
         self.assertEqual(c["formd_match"], "Acme Therapeutics, Inc.")
@@ -177,3 +203,23 @@ class TestSummarise(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTickerParsing(unittest.TestCase):
+    """Capital IQ's Exchange:Ticker column is the whole basis of the XBRL
+    join, so its parsing is worth pinning down."""
+
+    def test_exchange_prefix_stripped(self):
+        from enrich_xbrl import ticker_of
+        self.assertEqual(ticker_of("NasdaqCM:ACET"), "ACET")
+        self.assertEqual(ticker_of("OTCPK:ABPO"), "ABPO")
+        self.assertEqual(ticker_of("NYSE:XYZ"), "XYZ")
+
+    def test_bare_symbol(self):
+        from enrich_xbrl import ticker_of
+        self.assertEqual(ticker_of("acet"), "ACET")
+
+    def test_private_companies_have_none(self):
+        from enrich_xbrl import ticker_of
+        for blank in ("-", "", "   ", None, "nan"):
+            self.assertIsNone(ticker_of(blank))

@@ -31,6 +31,7 @@ from typing import Optional
 SOURCES = {
     "funding_formd.json": "formd",
     "funding_sbir.json": "sbir",
+    "rd_xbrl.json": "xbrl",
 }
 
 #: Columns appended to every company row, in the order they appear.
@@ -45,10 +46,13 @@ FUNDING_COLUMNS = [
     # university ties - source-neutral names, because OpenAlex will
     # contribute to these same two columns
     "university_current", "university_past", "university_partners",
+    # research intensity - public companies only, and deliberately NOT part
+    # of funding_*: R&D spend is money going out, not money coming in
+    "rd_expense_usd", "rd_expense_year", "rd_by_year",
     # supplementary facts the sources happen to carry
     "sbir_employees",
     # provenance, so any row can be traced back
-    "formd_match", "sbir_match",
+    "formd_match", "sbir_match", "xbrl_ticker",
 ]
 
 
@@ -80,6 +84,7 @@ def funding_columns(key: str, caches: dict) -> dict:
     """The funding columns for one company, given its normalised name key."""
     fd = (caches.get("formd") or {}).get(key) or {}
     sb = (caches.get("sbir") or {}).get(key) or {}
+    xb = (caches.get("xbrl") or {}).get(key) or {}
 
     # Form D's "recent" is the most recent raise: an equity round is a point
     # event, and the money either arrived or it did not.
@@ -127,10 +132,15 @@ def funding_columns(key: str, caches: dict) -> dict:
         "university_partners": len([p for p in past.split(";") if p.strip()])
                                or None,
 
+        "rd_expense_usd": _num(xb.get("rd_expense_usd")),
+        "rd_expense_year": xb.get("rd_expense_year"),
+        "rd_by_year": xb.get("rd_by_year") or None,
+
         "sbir_employees": sb.get("sbir_employees"),
 
         "formd_match": fd.get("matched_entity") or None,
         "sbir_match": sb.get("sbir_matched_name") or None,
+        "xbrl_ticker": xb.get("ticker") or None,
     }
 
 
@@ -158,6 +168,7 @@ def summarise(records: list) -> dict:
     with_any = sum(1 for r in records if r.get("funding_sources"))
     with_recent = sum(1 for r in records if r.get("funding_recent_usd"))
     with_uni = sum(1 for r in records if r.get("university_past"))
+    with_rd = sum(1 for r in records if r.get("rd_expense_usd"))
     no_rev = [r for r in records if _is_missing(r.get("revenue_usdmm"))]
     lit = sum(1 for r in no_rev if r.get("funding_sources"))
     return {
@@ -165,6 +176,7 @@ def summarise(records: list) -> dict:
         "with funding from any source": with_any,
         "with recent funding": with_recent,
         "with a university partner": with_uni,
+        "with R&D expense reported": with_rd,
         "no Capital IQ revenue": len(no_rev),
         "  of those, now have funding data": lit,
     }

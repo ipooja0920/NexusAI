@@ -218,7 +218,8 @@ class TempProject:
         ws = wb.active
         ws.title = "Screening"
         ws["A6"] = "Capital IQ Company Screening Report > TEST FIXTURE"
-        headers = {"A": "Company Name", "C": "Number of Employees - Global (Latest)",
+        headers = {"A": "Company Name", "B": "Exchange:Ticker",
+                   "C": "Number of Employees - Global (Latest)",
                    "D": "Revenue ($USDmm)", "E": "Company Type", "G": "Offices",
                    "I": "Business Description", "J": "Website",
                    "K": "Industry Classifications"}
@@ -229,7 +230,9 @@ class TempProject:
             ws[f"A{r}"] = name
             ws[f"C{r}"] = emp
             ws[f"D{r}"] = rev
-            ws[f"E{r}"] = "Public Company" if i % 3 == 0 else "Private Company"
+            public = i % 3 == 0
+            ws[f"B{r}"] = f"NasdaqCM:TST{i}" if public else "-"
+            ws[f"E{r}"] = "Public Company" if public else "Private Company"
             ws[f"G{r}"] = f"Headquarters\n{addr}\nUnited States\nMain Phone: 555-0100"
             ws[f"I{r}"] = desc
             ws[f"J{r}"] = web
