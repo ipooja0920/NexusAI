@@ -49,6 +49,12 @@ FUNDING_COLUMNS = [
     # research intensity - public companies only, and deliberately NOT part
     # of funding_*: R&D spend is money going out, not money coming in
     "rd_expense_usd", "rd_expense_year", "rd_by_year",
+    # revenue as the company itself reported it, in its own audited filing.
+    # Kept beside revenue_usdmm (Capital IQ's figure) rather than replacing
+    # it - two independent numbers are worth more than one overwritten, and
+    # a disagreement is itself informative.
+    "xbrl_revenue_usd", "xbrl_revenue_year", "xbrl_revenue_by_year",
+    "xbrl_revenue_tag",
     # supplementary facts the sources happen to carry
     "sbir_employees",
     # provenance, so any row can be traced back
@@ -136,6 +142,11 @@ def funding_columns(key: str, caches: dict) -> dict:
         "rd_expense_year": xb.get("rd_expense_year"),
         "rd_by_year": xb.get("rd_by_year") or None,
 
+        "xbrl_revenue_usd": _num(xb.get("xbrl_revenue_usd")),
+        "xbrl_revenue_year": xb.get("xbrl_revenue_year"),
+        "xbrl_revenue_by_year": xb.get("xbrl_revenue_by_year") or None,
+        "xbrl_revenue_tag": xb.get("xbrl_revenue_tag") or None,
+
         "sbir_employees": sb.get("sbir_employees"),
 
         "formd_match": fd.get("matched_entity") or None,
@@ -169,14 +180,18 @@ def summarise(records: list) -> dict:
     with_recent = sum(1 for r in records if r.get("funding_recent_usd"))
     with_uni = sum(1 for r in records if r.get("university_past"))
     with_rd = sum(1 for r in records if r.get("rd_expense_usd"))
+    with_xrev = sum(1 for r in records if r.get("xbrl_revenue_usd"))
     no_rev = [r for r in records if _is_missing(r.get("revenue_usdmm"))]
     lit = sum(1 for r in no_rev if r.get("funding_sources"))
+    rev_filled = sum(1 for r in no_rev if r.get("xbrl_revenue_usd"))
     return {
         "companies": n,
         "with funding from any source": with_any,
         "with recent funding": with_recent,
         "with a university partner": with_uni,
         "with R&D expense reported": with_rd,
+        "with XBRL revenue": with_xrev,
         "no Capital IQ revenue": len(no_rev),
         "  of those, now have funding data": lit,
+        "  of those, XBRL supplies revenue": rev_filled,
     }

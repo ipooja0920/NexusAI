@@ -52,6 +52,28 @@ FRAMES = "https://data.sec.gov/api/xbrl/frames/us-gaap/{tag}/USD/CY{year}.json"
 TICKERS = "https://www.sec.gov/files/company_tickers.json"
 TAG = "ResearchAndDevelopmentExpense"
 
+# Concepts fetched when no --tag is given. R&D has one dominant tag, but
+# revenue does NOT: companies split between the older "Revenues" and the
+# ASC 606 "RevenueFromContractWithCustomer..." tags, and asking for the
+# wrong one returns 404 rather than zero. Verified against real filings -
+# Kymera 404s on Revenues but reports under the ASC 606 tag; Organogenesis
+# does the opposite. So both are fetched and enrich_xbrl.py resolves per
+# company. Order here is the priority order used there.
+DEFAULT_TAGS = [
+    "ResearchAndDevelopmentExpense",
+    "RevenueFromContractWithCustomerExcludingAssessedTax",
+    "Revenues",
+    "RevenueFromContractWithCustomerIncludingAssessedTax",
+]
+
+#: Short filename stem per tag, so the CSVs stay readable.
+TAG_SLUG = {
+    "ResearchAndDevelopmentExpense": "rd_expense",
+    "RevenueFromContractWithCustomerExcludingAssessedTax": "revenue_asc606",
+    "Revenues": "revenue_legacy",
+    "RevenueFromContractWithCustomerIncludingAssessedTax": "revenue_asc606_incl",
+}
+
 DEFAULT_YEARS = [2023, 2024, 2025]
 
 # SEC blocks requests without a User-Agent that identifies the caller, and
@@ -201,35 +223,18 @@ def write_csv(path: Path, rows: list) -> None:
         ) from e
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(
-        description="Fetch SEC XBRL R&D expense frames -> one CSV per year.")
-    ap.add_argument("--years", type=int, nargs="+", default=DEFAULT_YEARS,
-                    help=f"Calendar years to fetch (default: {DEFAULT_YEARS})")
-    ap.add_argument("--tag", default=TAG,
-                    help=f"us-gaap concept to fetch (default: {TAG})")
-    ap.add_argument("--refresh", action="store_true",
-                    help="Ignore cached JSON and refetch from SEC.")
-    args = ap.parse_args()
-
-    print(f"\n=== NexusAI: SEC XBRL fetch [{args.tag}] ===\n")
-    SOURCE_DIR.mkdir(parents=True, exist_ok=True)
-
-    print("Loading SEC ticker -> CIK map...")
-    tickers = load_ticker_map(args.refresh)
-    print()
-
-    short_tag = "rd_expense" if args.tag == TAG else args.tag
+def fetch_tag(tag: str, years: list, tickers: dict, refresh: bool) -> list:
+    """Fetch one us-gaap concept for each year. Returns summary rows."""
+    slug = TAG_SLUG.get(tag, tag)
     summary = []
-
-    for year in sorted(args.years):
-        print(f"CY{year}:")
-        raw_path = SOURCE_DIR / f"frames_{short_tag}_CY{year}.json"
-        frame = load_or_fetch(raw_path, FRAMES.format(tag=args.tag, year=year),
-                              args.refresh)
+    print(f"\n--- {tag} ---")
+    for year in sorted(years):
+        raw_path = SOURCE_DIR / f"frames_{slug}_CY{year}.json"
+        frame = load_or_fetch(raw_path, FRAMES.format(tag=tag, year=year),
+                              refresh)
         if frame is None:
-            print(f"  no frame published for CY{year} yet - skipped\n")
-            summary.append((year, 0, 0, "not published"))
+            print(f"  CY{year}: no frame published yet - skipped")
+            summary.append((tag, year, 0, 0, "not published"))
             continue
 
         pts = frame.get("pts", len(frame.get("data", [])))
@@ -239,23 +244,48 @@ def main() -> int:
         note = ""
         if pts < SPARSE_WARNING:
             note = "INCOMPLETE - year not finished"
-            print(f"  WARNING: only {pts:,} companies reported for CY{year}.")
-            print("  A calendar year is not usable until companies have filed")
-            print("  their annual reports, 60-90 days after their year ends.")
+            print(f"  CY{year}: WARNING - only {pts:,} companies reported.")
+            print("    A calendar year is not usable until companies have")
+            print("    filed annual reports, 60-90 days after their year ends.")
 
-        csv_path = SOURCE_DIR / f"{short_tag}_CY{year}.csv"
+        csv_path = SOURCE_DIR / f"{slug}_CY{year}.csv"
         write_csv(csv_path, rows)
-        print(f"  {pts:,} companies  ({with_ticker:,} matched to a ticker)")
-        print(f"  -> {csv_path.name}  ({csv_path.stat().st_size/1024:.0f} KB)\n")
-        summary.append((year, pts, with_ticker, note))
+        print(f"  CY{year}: {pts:>6,} companies -> {csv_path.name}")
+        summary.append((tag, year, pts, with_ticker, note))
+    return summary
 
-    print("=" * 64)
-    print(f"  {'year':<8}{'companies':>12}{'with ticker':>14}   note")
-    for year, pts, tick, note in summary:
-        print(f"  CY{year:<6}{pts:>12,}{tick:>14,}   {note}")
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description="Fetch SEC XBRL frames -> one CSV per concept per year.")
+    ap.add_argument("--years", type=int, nargs="+", default=DEFAULT_YEARS,
+                    help=f"Calendar years to fetch (default: {DEFAULT_YEARS})")
+    ap.add_argument("--tag", nargs="+", default=None,
+                    help="us-gaap concept(s) to fetch. Default: "
+                         + ", ".join(DEFAULT_TAGS))
+    ap.add_argument("--refresh", action="store_true",
+                    help="Ignore cached JSON and refetch from SEC.")
+    args = ap.parse_args()
+
+    tags = args.tag or DEFAULT_TAGS
+
+    print("\n=== NexusAI: SEC XBRL fetch ===")
+    SOURCE_DIR.mkdir(parents=True, exist_ok=True)
+
+    print("\nLoading SEC ticker -> CIK map...")
+    tickers = load_ticker_map(args.refresh)
+
+    summary = []
+    for tag in tags:
+        summary.extend(fetch_tag(tag, args.years, tickers, args.refresh))
+
+    print("\n" + "=" * 70)
+    print(f"  {'concept':<46}{'year':>6}{'companies':>12}")
+    for tag, year, pts, _, note in summary:
+        print(f"  {TAG_SLUG.get(tag, tag):<46}{year:>6}{pts:>12,}  {note}")
     print(f"\n  Written to: {SOURCE_DIR}")
     print("  Completed years never change - re-running reuses the cached JSON.")
-    print("=" * 64 + "\n")
+    print("=" * 70 + "\n")
     return 0
 
 

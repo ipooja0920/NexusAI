@@ -70,14 +70,9 @@ def load_ticker_map(source_dir: Path) -> dict:
     return out
 
 
-def load_rd(source_dir: Path) -> tuple:
-    """CIK -> {year: rd_expense}. Reads every year fetch_sec_xbrl.py wrote."""
-    files = sorted(source_dir.glob("rd_expense_CY*.csv"))
-    if not files:
-        raise FileNotFoundError(
-            f"No R&D CSVs in {source_dir}\n"
-            "Run 'python fetch_sec_xbrl.py' first."
-        )
+def load_concept(source_dir: Path, slug: str) -> tuple:
+    """CIK -> {year: value}, for one fetched concept."""
+    files = sorted(source_dir.glob(f"{slug}_CY*.csv"))
     out: dict = {}
     for path in files:
         with open(path, newline="", encoding="utf-8") as fh:
@@ -85,12 +80,61 @@ def load_rd(source_dir: Path) -> tuple:
                 try:
                     cik = int(row["cik"])
                     year = int(row["fiscal_year"])
-                    val = float(row["rd_expense_usd"])
+                    val = float(row["rd_expense_usd"])   # the value column
                 except (KeyError, TypeError, ValueError):
                     continue
                 if val > 0:
                     out.setdefault(cik, {})[year] = val
     return out, [p.name for p in files]
+
+
+def load_rd(source_dir: Path) -> tuple:
+    """CIK -> {year: rd_expense}."""
+    out, files = load_concept(source_dir, "rd_expense")
+    if not files:
+        raise FileNotFoundError(
+            f"No R&D CSVs in {source_dir}\n"
+            "Run 'python fetch_sec_xbrl.py' first."
+        )
+    return out, files
+
+
+# Revenue tags in the order they are tried. Unlike R&D, no single tag
+# covers everyone: a company's accountants pick one, and asking SEC for
+# the wrong one returns 404 rather than zero. Verified against real
+# filings - Kymera 404s on Revenues but reports $39.2m under the ASC 606
+# tag; Organogenesis does the reverse and reports $564m under Revenues.
+#
+# ASC 606 first because it is the current standard; the older "Revenues"
+# is the fallback for companies that never migrated. "IncludingAssessedTax"
+# last because it bundles sales tax into the figure, which overstates it
+# slightly - acceptable only when nothing else is available.
+REVENUE_TAGS = [
+    ("revenue_asc606", "RevenueFromContractWithCustomerExcludingAssessedTax"),
+    ("revenue_legacy", "Revenues"),
+    ("revenue_asc606_incl", "RevenueFromContractWithCustomerIncludingAssessedTax"),
+]
+
+
+def load_revenue(source_dir: Path) -> tuple:
+    """CIK -> (years, tag_name), resolving the first tag that has data.
+
+    Resolved per COMPANY rather than globally, because the split is per
+    company: whichever tag a filer uses is the one that has their number.
+    """
+    loaded = []
+    for slug, tag in REVENUE_TAGS:
+        data, files = load_concept(source_dir, slug)
+        if files:
+            loaded.append((tag, data, files))
+
+    resolved: dict = {}
+    for tag, data, _ in loaded:                 # priority order
+        for cik, years in data.items():
+            if cik not in resolved:             # first tag to have it wins
+                resolved[cik] = (years, tag)
+    names = [f for _, _, files in loaded for f in files]
+    return resolved, names, [t for t, _, _ in loaded]
 
 
 def ticker_of(value) -> Optional[str]:
@@ -101,7 +145,8 @@ def ticker_of(value) -> Optional[str]:
     return (s.split(":")[-1] if ":" in s else s).strip().upper() or None
 
 
-def match_companies(companies: pd.DataFrame, tickers: dict, rd: dict) -> list:
+def match_companies(companies: pd.DataFrame, tickers: dict, rd: dict,
+                    revenue: dict) -> list:
     rows = []
     for _, c in companies.iterrows():
         tick = ticker_of(c.get("ticker"))
@@ -111,19 +156,32 @@ def match_companies(companies: pd.DataFrame, tickers: dict, rd: dict) -> list:
         if cik is None:
             continue                       # foreign listing, or delisted
         years = rd.get(cik)
-        if not years:
-            continue                       # public but reports no R&D
+        rev_years, rev_tag = revenue.get(cik, (None, None))
+        if not years and not rev_years:
+            continue                       # public but reports neither
 
-        latest = max(years)
+        latest = max(years) if years else None
+        rev_latest = max(rev_years) if rev_years else None
         rows.append({
             "company": c.get("company"),
             "ticker": tick,
             "cik": cik,
-            "rd_expense_usd": round(years[latest], 2),
+            "rd_expense_usd": round(years[latest], 2) if years else None,
             "rd_expense_year": latest,
             "rd_by_year": "; ".join(f"{y}:${years[y]/1e6:.2f}M"
-                                    for y in sorted(years, reverse=True)),
-            "rd_years_reported": len(years),
+                                    for y in sorted(years, reverse=True))
+                          if years else None,
+            "rd_years_reported": len(years) if years else 0,
+            # Revenue straight from the company's own audited filing, kept
+            # separate from Capital IQ's figure rather than replacing it -
+            # two independent numbers are more useful than one overwritten.
+            "xbrl_revenue_usd": round(rev_years[rev_latest], 2)
+                                if rev_years else None,
+            "xbrl_revenue_year": rev_latest,
+            "xbrl_revenue_by_year": "; ".join(
+                f"{y}:${rev_years[y]/1e6:.2f}M"
+                for y in sorted(rev_years, reverse=True)) if rev_years else None,
+            "xbrl_revenue_tag": rev_tag,
             # read_capitaliq gives the RAW strings from the sheet, so these
             # need parsing - the enriched workbook's numeric columns do not
             # exist yet at this point in the pipeline.
@@ -134,8 +192,11 @@ def match_companies(companies: pd.DataFrame, tickers: dict, rd: dict) -> list:
     return rows
 
 
-REVIEW_COLUMNS = ["company", "ticker", "cik", "rd_expense_usd",
-                  "rd_expense_year", "rd_by_year", "rd_years_reported",
+REVIEW_COLUMNS = ["company", "ticker", "cik",
+                  "rd_expense_usd", "rd_expense_year", "rd_by_year",
+                  "rd_years_reported",
+                  "xbrl_revenue_usd", "xbrl_revenue_year",
+                  "xbrl_revenue_by_year", "xbrl_revenue_tag",
                   "ciq_revenue_usdmm", "ciq_employees", "key"]
 
 
@@ -180,9 +241,17 @@ def main() -> int:
     print(f"Reading from: {source_dir}")
     tickers = load_ticker_map(source_dir)
     rd, files = load_rd(source_dir)
+    revenue, rev_files, rev_tags = load_revenue(source_dir)
     print(f"  ticker map      : {len(tickers):,} tickers")
     print(f"  R&D frames      : {', '.join(files)}")
-    print(f"  companies with R&D reported: {len(rd):,}")
+    print(f"  companies with R&D reported    : {len(rd):,}")
+    if rev_tags:
+        print(f"  revenue tags loaded           : "
+              f"{', '.join(rev_tags)}")
+        print(f"  companies with revenue reported: {len(revenue):,}")
+    else:
+        print("  no revenue frames found - run fetch_sec_xbrl.py "
+              "to add them")
 
     from nexus.excel_io import read_capitaliq
     companies = read_capitaliq(cfg.companies_raw, cfg.capitaliq)
@@ -190,7 +259,7 @@ def main() -> int:
 
     with_ticker = sum(1 for _, c in companies.iterrows()
                       if ticker_of(c.get("ticker")))
-    matches = match_companies(companies, tickers, rd)
+    matches = match_companies(companies, tickers, rd, revenue)
 
     cache = {m["key"]: {k: v for k, v in m.items() if k != "key"}
              for m in matches if m["key"]}
@@ -205,10 +274,15 @@ def main() -> int:
         "ticker resolved to a CIK": sum(
             1 for _, c in companies.iterrows()
             if (t := ticker_of(c.get("ticker"))) and t in tickers),
-        "matched with R&D reported": len(matches),
-        "  of those, no Capital IQ revenue": no_rev,
+        "matched (R&D or revenue)": len(matches),
+        "  with R&D expense": sum(1 for m in matches if m["rd_expense_usd"]),
+        "  with XBRL revenue": sum(1 for m in matches if m["xbrl_revenue_usd"]),
+        "  no Capital IQ revenue": no_rev,
+        "    of those, XBRL supplies one": sum(
+            1 for m in matches
+            if not m.get("ciq_revenue_usdmm") and m["xbrl_revenue_usd"]),
         "total R&D across matches (USD)":
-            round(sum(m["rd_expense_usd"] for m in matches), 2),
+            round(sum(m["rd_expense_usd"] or 0 for m in matches), 2),
     }
     write_review(review_path, matches, stats)
 

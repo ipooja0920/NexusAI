@@ -63,6 +63,10 @@ XBRL = {
         "rd_expense_usd": 99_000_000.0,
         "rd_expense_year": 2025,
         "rd_by_year": "2025:$99.00M; 2024:$88.00M",
+        "xbrl_revenue_usd": 4_000_000.0,
+        "xbrl_revenue_year": 2025,
+        "xbrl_revenue_by_year": "2025:$4.00M; 2024:$3.00M",
+        "xbrl_revenue_tag": "RevenueFromContractWithCustomerExcludingAssessedTax",
     },
 }
 
@@ -159,6 +163,22 @@ class TestFundingColumns(unittest.TestCase):
         c = funding_columns("dormant labs", self.caches)
         self.assertIsNone(c["rd_expense_usd"])
         self.assertIsNone(c["xbrl_ticker"])
+        self.assertIsNone(c["xbrl_revenue_usd"])
+
+    def test_xbrl_revenue_does_not_touch_the_funding_figures(self):
+        """Revenue is money the company earned, not money raised. It must
+        sit beside the funding columns, never inside them."""
+        c = funding_columns("acme therapeutics", self.caches)
+        self.assertEqual(c["xbrl_revenue_usd"], 4_000_000.0)
+        self.assertEqual(c["funding_recent_usd"], 10_000_000.0)   # unchanged
+        self.assertEqual(c["funding_total_usd"], 29_000_000.0)    # unchanged
+
+    def test_the_revenue_tag_is_recorded(self):
+        """No single XBRL tag covers every company, so which one supplied a
+        figure has to travel with it or the number is unauditable."""
+        c = funding_columns("acme therapeutics", self.caches)
+        self.assertEqual(c["xbrl_revenue_tag"],
+                         "RevenueFromContractWithCustomerExcludingAssessedTax")
 
     def test_provenance_is_carried(self):
         c = funding_columns("acme therapeutics", self.caches)
