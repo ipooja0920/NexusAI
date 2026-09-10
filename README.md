@@ -17,10 +17,16 @@ NexusAI/
 ├── .env.example
 │
 ├── enrich_companies.py       STAGE 0 — builds companies_enriched.xlsx
-├── enrich_funding.py         source step — SEC Form D  → cache
-├── fetch_openalex.py         source step — OpenAlex    → sources/
 ├── match_faculty.py          STAGE 1 — faculty → ranked companies
-├── run_tests.py              93 tests, ~5s, no API key needed
+│
+│                             source steps: fetch_* downloads, enrich_* matches
+├── enrich_funding.py           SEC Form D          → cache
+├── enrich_sbir.py              SBIR/STTR awards    → cache
+├── fetch_sec_xbrl.py           SEC XBRL            → sources/
+├── enrich_xbrl.py              SEC XBRL            → cache
+├── fetch_openalex.py           OpenAlex            → sources/
+│
+├── run_tests.py              157 tests, ~5s, no API key or network needed
 │
 ├── nexus/                    the shared library
 │   ├── settings.py             config loader, path resolution
@@ -28,7 +34,8 @@ NexusAI/
 │   ├── geo.py                  address cleaning, geocoding, distance
 │   ├── prefilter.py            embeddings + cosine similarity
 │   ├── scoring.py              LLM prompts + component score maths
-│   ├── matching.py             company-name normaliser (all sources)
+│   ├── matching.py             company matching, shared by every source
+│   ├── funding.py              joins the source caches onto companies
 │   └── cache.py                the JSON caches
 │
 ├── tests/                    each test builds its own throwaway project
@@ -54,17 +61,18 @@ component scores, and computes a description embedding. Results are written
 to `data/companies_enriched.xlsx`; geocodes and embeddings are cached in
 `data/cache/` so a datasource refresh only pays for what changed.
 
-**Source steps — `enrich_funding.py`, `fetch_openalex.py`** (run on their own
-schedule, whenever you refresh a download): each reads one external dataset,
-matches it to your companies by name, and writes the result to `data/cache/`.
-They never touch the enriched workbook — Stage 0 is the only thing that
-writes it, and picks these caches up on its next run. If a cache doesn't
-exist yet, those columns just come out blank; nothing breaks and no run
-order is required.
+**Source steps** (run on their own schedule, whenever you refresh a
+download): each reads one external dataset, matches it to your companies,
+and writes the result to `data/cache/`. They never touch the enriched
+workbook — Stage 0 is the only thing that writes it, and picks these caches
+up on its next run. If a cache doesn't exist yet, those columns just come
+out blank; nothing breaks and no run order is required.
 
 | Script | Reads | Answers |
 |---|---|---|
 | `enrich_funding.py` | `sources/formd/` | has this company raised private capital, how much, how recently? |
+| `enrich_sbir.py` | `sources/sbir/` | has the federal government paid it to do research, and did it bring a university partner? |
+| `enrich_xbrl.py` | `sources/xbrl/` | how much does it spend on R&D? (public companies only) |
 | `fetch_openalex.py` | OpenAlex API | does it publish research or fund academic work? |
 
 **Stage 1 — `match_faculty.py`** (run whenever faculty have `Flag = N`):
@@ -106,11 +114,15 @@ data/
 │   └── Faculty Database.xlsx
 ├── sources/                  downloaded from outside ← re-downloadable
 │   ├── formd/                  SEC Form D quarters
-│   └── openalex/               raw API pulls + openalex_us.xlsx
+│   ├── sbir/                   award_data.csv
+│   ├── xbrl/                   R&D frames + ticker map
+│   └── openalex/               raw API pulls
 ├── cache/                    computed by us          ← delete to force a rebuild
 │   ├── geocode.json
 │   ├── embeddings.json
 │   ├── funding_formd.json
+│   ├── funding_sbir.json
+│   ├── rd_xbrl.json
 │   └── company_scores.json
 ├── review/                   match-quality workbooks, to check by eye
 ├── output/                   the final per-faculty results
@@ -130,7 +142,7 @@ On a fresh clone, create `data/input/` and add these two files:
 
 | File | What it is |
 |---|---|
-| `data/input/companies_raw.xlsx` | Capital IQ screening export (headers on row 8, data from row 9; columns A=name, C=employees, D=revenue $USDmm, G=address, I=description, J=website) |
+| `data/input/companies_raw.xlsx` | Capital IQ screening export (headers on row 8, data from row 9; columns A=name, B=exchange:ticker, C=employees, D=revenue $USDmm, E=company type, G=address, I=description, J=website, K=industry) |
 | `data/input/Faculty Database.xlsx` | Headers on row 1: Faculty, School/College, Department, Research Description, Industry Classification1, Industry Classification2, Flag (N = not yet matched) |
 
 ## Where to download each source
@@ -225,6 +237,50 @@ free.
 
 SBIR refreshes the file monthly.
 
+### SEC XBRL — R&D expense for public companies
+
+**No manual download** — `fetch_sec_xbrl.py` pulls it from SEC's API:
+
+```bash
+python fetch_sec_xbrl.py            # CY2023-CY2025, about 1.3 MB
+python fetch_sec_xbrl.py --years 2026
+python fetch_sec_xbrl.py --refresh  # ignore the cache and refetch
+```
+
+Capital IQ says how big a company is, not how much it spends on research.
+For a partnership that is the more useful number — some of the most
+research-intensive companies in the datasource report almost no revenue.
+
+It downloads from two places, both browsable if you want to look:
+
+| What | Where |
+|---|---|
+| R&D expense, one calendar year at a time | `https://data.sec.gov/api/xbrl/frames/us-gaap/ResearchAndDevelopmentExpense/USD/CY2024.json` |
+| Ticker → CIK map | <https://www.sec.gov/files/company_tickers.json> |
+
+The frames API returns one accounting concept for one year across *every*
+filer, so three years is three small calls rather than one call per
+company. SEC's API documentation is at
+<https://www.sec.gov/search-filings/edgar-application-programming-interfaces>.
+
+**Refresh roughly once a year.** A calendar year only fills up once
+companies file their annual reports, 60–90 days after their year ends, and
+then stops changing. Completed years are cached and never refetched, so
+re-running is free. The current year returns a nearly empty frame rather
+than an error, so the script warns instead of writing a misleading file.
+
+Two things that bite if you script this yourself:
+
+- **SEC requires a `User-Agent` header** identifying you, and returns a bare
+  `403` without one — which looks exactly like a missing file. The script
+  sets it; a browser sets its own, so clicking the links above works.
+- **Revenue is fragmented across several XBRL tags** and none is complete,
+  which is why this fetches R&D expense only. R&D has one dominant tag.
+
+This only reaches publicly listed companies — a private company files no
+XBRL at all — so it improves what you know about companies you already have
+data on rather than reaching new ones.
+
 ### OpenAlex — research and funding track record
 
 No manual download — `fetch_openalex.py` pulls it from the API into
@@ -276,14 +332,34 @@ python enrich_companies.py          # after adding/refreshing the datasource
 python match_faculty.py             # match everyone with Flag = N
 ```
 
-After adding a new download to `data/sources/`, run its source step, then
-Stage 0 again to fold the result into the enriched workbook:
+### The source steps
+
+Each public dataset has its own script. They read a download, match it to
+your companies, and write the result to `data/cache/` plus a review sheet.
+Run one when its data changes — then `enrich_companies.py` to fold the
+result into the workbook.
+
+| Command | Reads | Writes |
+|---|---|---|
+| `python enrich_funding.py` | `sources/formd/` | `cache/funding_formd.json` |
+| `python enrich_sbir.py` | `sources/sbir/award_data.csv` | `cache/funding_sbir.json` |
+| `python fetch_sec_xbrl.py` | SEC API | `sources/xbrl/` |
+| `python enrich_xbrl.py` | `sources/xbrl/` | `cache/rd_xbrl.json` |
+| `python fetch_openalex.py` | OpenAlex API | `sources/openalex/` |
+
+Note the two verbs: **`fetch_*` downloads, `enrich_*` matches.** XBRL needs
+both, because SEC has to be downloaded before it can be matched. Form D and
+SBIR you download by hand, so they only need the matching step.
+
+A typical refresh:
 
 ```bash
-python enrich_funding.py            # after adding SEC quarters to sources/formd/
-python fetch_openalex.py            # downloads to sources/openalex/ (~200MB)
+python enrich_sbir.py               # after replacing award_data.csv
 python enrich_companies.py          # rebuild — free, everything else is cached
 ```
+
+Order does not matter. A cache that does not exist yet leaves its columns
+blank rather than failing, so nothing breaks if you run enrichment first.
 
 Useful options:
 
@@ -292,11 +368,14 @@ python match_faculty.py --dry-run             # show what would run, no API spen
 python match_faculty.py --faculty "Ioulia Valla"   # force one faculty, ignore flag
 python enrich_companies.py --skip-geocode     # skip geocoding (testing only)
 python enrich_funding.py --min-year 2023      # ignore older Form D filings
-python fetch_openalex.py --refresh            # refetch instead of reusing sources/
+python enrich_sbir.py --recent-years 3        # narrow the "recent funding" window
+python fetch_sec_xbrl.py --refresh            # refetch instead of reusing the cache
+python fetch_openalex.py --refresh            # same, for OpenAlex
 ```
 
-You only need `enrich_companies.py` when the company datasource changes.
-Day to day, `match_faculty.py` is the whole workflow.
+You only need `enrich_companies.py` when the datasource changes or a source
+step has refreshed a cache. Day to day, `match_faculty.py` is the whole
+workflow.
 
 ## Which files do I have to manage?
 
@@ -307,6 +386,8 @@ Almost none — the programs look after their own files.
 | `data/input/companies_raw.xlsx` | **Yes** — you replace it when you refresh the Capital IQ extract. Read-only to the programs. |
 | `data/input/Faculty Database.xlsx` | **Yes** — you add faculty rows. The program only writes the Flag cell (`N` → `Y`). |
 | `data/sources/formd/` | **Yes** — you drop each downloaded SEC quarter in here. Nothing else needs changing. |
+| `data/sources/sbir/award_data.csv` | **Yes** — replace the whole file when you refresh it (SBIR updates monthly). |
+| `data/sources/xbrl/` | No — written by `fetch_sec_xbrl.py`. |
 | `data/sources/openalex/` | No — written by `fetch_openalex.py`. |
 | `data/companies_enriched.xlsx` | No — rebuilt and overwritten on every enrichment run. Never needs deleting. |
 | `data/cache/*.json` | No — grows on its own. Delete only to deliberately force re-geocoding or re-scoring. |
@@ -341,7 +422,7 @@ edits needed to retune the system or move it to another machine.
 ## Tests
 
 ```bash
-python run_tests.py          # 93 tests, ~5 seconds
+python run_tests.py          # 157 tests, ~5 seconds
 python run_tests.py -v       # show each test name
 ```
 
