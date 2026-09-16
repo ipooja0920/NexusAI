@@ -9,3 +9,6 @@ venv/
 __pycache__/
 *.pyc
 .DS_Store
+
+# detached run logs
+logs/

@@ -26,7 +26,12 @@ NexusAI/
 ├── enrich_xbrl.py              SEC XBRL            → cache
 ├── fetch_openalex.py           OpenAlex            → sources/
 │
-├── run_tests.py              157 tests, ~5s, no API key or network needed
+│                             raw extracts, for checking a figure by eye
+├── export_formd_raw.py         every Form D filing → review/formd_raw.csv
+├── inspect_formd.py            one company's filings → stdout
+│
+├── run_enrich.sh             run Stage 0 detached, so you can walk away
+├── run_tests.py              159 tests, ~5s, no API key or network needed
 │
 ├── nexus/                    the shared library
 │   ├── settings.py             config loader, path resolution
@@ -39,6 +44,7 @@ NexusAI/
 │   └── cache.py                the JSON caches
 │
 ├── tests/                    each test builds its own throwaway project
+├── logs/                     git-ignored — written by run_enrich.sh
 │
 └── data/                     git-ignored — see below
     ├── input/                  files YOU provide
@@ -332,6 +338,62 @@ python enrich_companies.py          # after adding/refreshing the datasource
 python match_faculty.py             # match everyone with Flag = N
 ```
 
+### Long runs — closing the terminal
+
+`enrich_companies.py` geocodes and embeds every company, which takes a
+while on a full datasource. Running it in the foreground means leaving the
+Terminal window open and the Mac awake for the duration.
+
+```bash
+./run_enrich.sh                     # any enrich_companies.py flag works
+```
+
+It prints a PID and a log path, then returns you to the prompt:
+
+```
+  started    PID 4821
+  log        logs/enrich_20260916_215746.log
+
+  watch it   tail -f logs/enrich_20260916_215746.log
+  check it   kill -0 4821 && echo running || echo finished
+  stop it    kill 4821
+```
+
+You can now close the Terminal window, quit Terminal, or log out — the job
+keeps going. Come back and `tail` the log.
+
+Three things it does that a bare `python enrich_companies.py &` does not:
+
+* **`caffeinate -i`** stops the Mac idle-sleeping while the job runs, and
+  releases the moment it ends — so the machine sleeps normally afterwards
+  instead of staying awake all night.
+* **Unbuffered output**, so `tail -f` shows progress live. Python buffers
+  stdout when it is not writing to a terminal, which makes the log look
+  frozen for minutes at a time.
+* **Refuses to start twice.** Two runs would fight over the same caches and
+  the same output workbook, and the loser would write a half-built file.
+
+**The lid still has to stay open.** Closing it sleeps the Mac and pauses
+the job until you open it again; no command can override that. If you need
+the lid shut, plug into power with an external display attached — that is
+clamshell mode, and the same command works.
+
+### Checking a figure in the enriched workbook
+
+The workbook gives one aggregated line per company. When a number there
+looks wrong, these print the filings underneath it, with SEC's own column
+names and no cleaning applied:
+
+```bash
+python export_formd_raw.py               # all companies → review/formd_raw.csv
+python export_formd_raw.py --company Agilix   # just one
+python inspect_formd.py "Agilix"         # straight to the screen
+```
+
+Two helper columns say what the pipeline *would* do without doing it:
+`_would_be_dropped` names the reason a row would be discarded, and
+`_span_years` is the gap between first sale and filing date.
+
 ### The source steps
 
 Each public dataset has its own script. They read a download, match it to
@@ -422,7 +484,7 @@ edits needed to retune the system or move it to another machine.
 ## Tests
 
 ```bash
-python run_tests.py          # 157 tests, ~5 seconds
+python run_tests.py          # 159 tests, ~5 seconds
 python run_tests.py -v       # show each test name
 ```
 
