@@ -32,8 +32,25 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
   exit 1
 fi
 
-PY=$(command -v python3 || command -v python)
-if [ -z "$PY" ]; then echo "No python found on PATH."; exit 1; fi
+# Prefer the project's own venv, so the script works whether or not the
+# venv is active in the calling shell. A detached job outlives the shell
+# that started it, so relying on the caller having sourced activate is a
+# good way to get a ModuleNotFoundError twenty minutes in.
+if [ -x "venv/bin/python" ]; then
+  PY="venv/bin/python"
+elif [ -x ".venv/bin/python" ]; then
+  PY=".venv/bin/python"
+else
+  PY=$(command -v python3 || command -v python)
+fi
+if [ -z "$PY" ]; then echo "No python found."; exit 1; fi
+
+if ! "$PY" -c "import pandas, openpyxl" 2>/dev/null; then
+  echo "$PY cannot import pandas/openpyxl - check the venv:"
+  echo "  python3 -m venv venv && source venv/bin/activate"
+  echo "  pip install -r requirements.txt"
+  exit 1
+fi
 
 # caffeinate is macOS-only; skip it elsewhere rather than failing.
 if command -v caffeinate >/dev/null 2>&1; then
