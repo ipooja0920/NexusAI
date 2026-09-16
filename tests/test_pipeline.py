@@ -194,7 +194,9 @@ class TestCaching(PipelineTestCase):
             p.run_enrich()
             cfg = p.settings()
             wb = openpyxl.load_workbook(cfg.companies_raw)
-            wb.active["I9"] = "Completely rewritten description about pyrolysis."
+            # K is the Business Description column - see harness._write_companies,
+            # which mirrors the real Capital IQ export layout.
+            wb.active["K9"] = "Completely rewritten description about pyrolysis."
             wb.save(cfg.companies_raw)
             FakeOpenAI.reset()
             p.run_enrich()

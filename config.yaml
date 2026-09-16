@@ -28,13 +28,13 @@ capitaliq:
   data_start_row: 9     # first data row
   col_company: A
   col_ticker: B         # "NasdaqCM:ACET"; blank for private companies
-  col_employees: C
-  col_revenue: D        # $USDmm
-  col_company_type: E   # "Public Company" / "Private Company"
-  col_address: G        # "Offices" block
-  col_description: I
-  col_website: J
-  col_industry: K       # "Industry Classifications"
+  col_industry: C       # "Industry Classifications"
+  col_company_type: D   # "Public Company" / "Private Company"
+  col_employees: F
+  col_revenue: G        # $USDmm
+  col_address: I        # "Offices" block
+  col_description: K
+  col_website: L
 
 # --------- Faculty Database layout -----------------------------------
 faculty:

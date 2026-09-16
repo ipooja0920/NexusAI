@@ -218,25 +218,31 @@ class TempProject:
         ws = wb.active
         ws.title = "Screening"
         ws["A6"] = "Capital IQ Company Screening Report > TEST FIXTURE"
+        # Column letters must mirror the real Capital IQ export, because
+        # config.yaml addresses fields BY LETTER and the fixture inherits the
+        # project's real config. A screen re-run can reorder them, so this
+        # layout is part of the contract under test, not an arbitrary choice.
         headers = {"A": "Company Name", "B": "Exchange:Ticker",
-                   "C": "Number of Employees - Global (Latest)",
-                   "D": "Revenue ($USDmm)", "E": "Company Type", "G": "Offices",
-                   "I": "Business Description", "J": "Website",
-                   "K": "Industry Classifications"}
+                   "C": "Industry Classifications", "D": "Company Type",
+                   "E": "Geographic Locations",
+                   "F": "Number of Employees - Global (Latest)",
+                   "G": "Revenue ($USDmm)", "H": "Competitors", "I": "Offices",
+                   "J": "Geographic Region", "K": "Business Description",
+                   "L": "Website", "M": "Company Status"}
         for col, text in headers.items():
             ws[f"{col}8"] = text
         for i, (name, emp, rev, addr, desc, web) in enumerate(self.companies):
             r = 9 + i
-            ws[f"A{r}"] = name
-            ws[f"C{r}"] = emp
-            ws[f"D{r}"] = rev
             public = i % 3 == 0
+            ws[f"A{r}"] = name
             ws[f"B{r}"] = f"NasdaqCM:TST{i}" if public else "-"
-            ws[f"E{r}"] = "Public Company" if public else "Private Company"
-            ws[f"G{r}"] = f"Headquarters\n{addr}\nUnited States\nMain Phone: 555-0100"
-            ws[f"I{r}"] = desc
-            ws[f"J{r}"] = web
-            ws[f"K{r}"] = "Pharmaceuticals, Biotechnology and Life Sciences (Primary)"
+            ws[f"C{r}"] = "Pharmaceuticals, Biotechnology and Life Sciences (Primary)"
+            ws[f"D{r}"] = "Public Company" if public else "Private Company"
+            ws[f"F{r}"] = emp
+            ws[f"G{r}"] = rev
+            ws[f"I{r}"] = f"Headquarters\n{addr}\nUnited States\nMain Phone: 555-0100"
+            ws[f"K{r}"] = desc
+            ws[f"L{r}"] = web
         wb.save(self.dir / "data" / "input" / "companies_raw.xlsx")
 
     def _write_faculty(self):
