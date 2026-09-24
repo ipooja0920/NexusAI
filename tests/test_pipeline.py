@@ -208,6 +208,44 @@ class TestCaching(PipelineTestCase):
             p.__exit__()
 
 
+class TestEnrichedCarriesTheFundingScore(PipelineTestCase):
+    """Every score that needs no API call belongs in the enriched sheet,
+    beside distance_score and revenue_score - not only in a faculty output."""
+
+    def test_funding_score_and_reason_are_written(self):
+        p = self._prepared()
+        try:
+            p.run_enrich()
+            cfg = p.settings()
+            wb = openpyxl.load_workbook(cfg.companies_enriched)
+            ws = wb["Companies"]
+            hdr = [c.value for c in ws[1]]
+            self.assertIn("funding_score", hdr)
+            self.assertIn("funding_reason", hdr)
+            col = hdr.index("funding_score") + 1
+            scores = [ws.cell(r, col).value for r in range(2, ws.max_row + 1)]
+            self.assertTrue(all(s is not None for s in scores))
+            self.assertTrue(all(0.0 <= float(s) <= 1.0 for s in scores))
+        finally:
+            p.__exit__()
+
+    def test_the_reason_names_the_evidence(self):
+        """A bare 0.42 with nothing behind it is less useful than the LLM
+        sentence it replaced, so the reason has to say what it saw."""
+        p = self._prepared()
+        try:
+            p.run_enrich()
+            cfg = p.settings()
+            ws = openpyxl.load_workbook(cfg.companies_enriched)["Companies"]
+            hdr = [c.value for c in ws[1]]
+            col = hdr.index("funding_reason") + 1
+            reasons = [ws.cell(r, col).value for r in range(2, ws.max_row + 1)]
+            self.assertTrue(all(r and str(r).strip() for r in reasons))
+            self.assertTrue(any("revenue" in str(r) for r in reasons))
+        finally:
+            p.__exit__()
+
+
 class TestPrefilterActivation(PipelineTestCase):
     def test_prefilter_inactive_when_fewer_companies_than_cutoff(self):
         p = self._prepared()          # 8 companies, cutoff 300

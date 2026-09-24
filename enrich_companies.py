@@ -21,7 +21,8 @@ import time
 
 from nexus.cache import Caches, _text_key
 from nexus.excel_io import read_capitaliq, write_enriched
-from nexus.funding import funding_columns, load_caches, summarise
+from nexus.funding import (company_funding_score, funding_columns,
+                           load_caches, summarise)
 from nexus.geo import Geocoder, clean_address_block, distance_miles, select_address_block
 from nexus.matching import normalise_company_name
 from nexus.prefilter import company_embedding_text, embed_text
@@ -136,6 +137,13 @@ def main() -> int:
         # Funding is a lookup, not a computation - the source steps already
         # did the matching and wrote the answer to a cache.
         record.update(funding_columns(normalise_company_name(company), funding))
+
+        # Computed here rather than in match_faculty so the enriched sheet
+        # carries every score that needs no API call. It depends only on the
+        # funding columns just joined above, so it has to come after them.
+        f_score, f_reason = company_funding_score(record, cfg.funding)
+        record["funding_score"] = f_score
+        record["funding_reason"] = f_reason
 
         # SBIR often knows a headcount where Capital IQ does not. Fill only
         # the gap; never overwrite what Capital IQ gave us.

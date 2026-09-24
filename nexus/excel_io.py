@@ -102,7 +102,8 @@ ENRICHED_COLUMNS = [
     "company_type", "industry",
     "latitude", "longitude", "geocode_provider", "distance_miles",
     "employees", "revenue_usdmm",
-    "distance_score", "employee_score", "revenue_score",
+    "distance_score", "employee_score", "revenue_score", "funding_score",
+    "funding_reason",
 ] + FUNDING_COLUMNS + [
     "embedding_key",
 ]
