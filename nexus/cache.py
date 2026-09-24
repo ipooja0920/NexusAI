@@ -25,9 +25,22 @@ def _text_key(text: str) -> str:
 
 
 class JsonCache:
+    """A dict that persists to JSON, and only rewrites itself when it has
+    actually changed.
+
+    The dirty flag is not a micro-optimisation. embeddings.json holds a
+    1536-float vector per company and reaches 724MB on a full datasource,
+    and enrich_companies calls save_all() every 25 rows so an interrupt
+    loses nothing. On a re-run where every geocode and embedding is already
+    cached - the common case - that was 872 rewrites of an unchanged 724MB
+    file, about 631GB of disk writes, and it was the ENTIRE cost of the run:
+    2.5 hours of serialising data that nobody had modified.
+    """
+
     def __init__(self, path: Path):
         self.path = path
         self._data: dict = {}
+        self._dirty = False
         if path.exists():
             try:
                 self._data = json.loads(path.read_text(encoding="utf-8"))
@@ -39,7 +52,12 @@ class JsonCache:
         return self._data.get(key)
 
     def set(self, key: str, value) -> None:
+        # Writing back an identical value is not a change. Callers only set
+        # on a cache MISS today, but that is their business, not ours.
+        if key in self._data and self._data[key] == value:
+            return
         self._data[key] = value
+        self._dirty = True
 
     def __contains__(self, key: str) -> bool:
         return key in self._data
@@ -47,11 +65,17 @@ class JsonCache:
     def __len__(self) -> int:
         return len(self._data)
 
-    def save(self) -> None:
+    def save(self, force: bool = False) -> None:
+        """Write the cache out, unless nothing has changed since it loaded."""
+        if not self._dirty and not force and self.path.exists():
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self._data, indent=1), encoding="utf-8")
+        # indent=1 on a 724MB file costs real time and buys nothing - these
+        # are sha256 keys and float vectors, not something anyone reads.
+        tmp.write_text(json.dumps(self._data), encoding="utf-8")
         tmp.replace(self.path)
+        self._dirty = False
 
 
 class Caches:

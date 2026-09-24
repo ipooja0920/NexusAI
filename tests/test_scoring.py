@@ -203,3 +203,58 @@ class TestDistanceAtTheReferencePoint(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCacheOnlyWritesWhenChanged(unittest.TestCase):
+    """embeddings.json reaches 724MB on a full datasource, and enrichment
+    saves every 25 rows so an interrupt loses nothing. On a re-run where
+    everything is already cached, that was 872 rewrites of an unchanged file
+    - the entire cost of a 2.5 hour run."""
+
+    def _cache(self):
+        import tempfile
+        from pathlib import Path
+        from nexus.cache import JsonCache
+        d = Path(tempfile.mkdtemp(prefix="nexusai_cache_"))
+        return JsonCache(d / "c.json")
+
+    def test_a_clean_cache_does_not_rewrite_the_file(self):
+        c = self._cache()
+        c.set("k", [1, 2, 3])
+        c.save()
+        first = c.path.stat().st_mtime_ns
+        c.save()
+        self.assertEqual(c.path.stat().st_mtime_ns, first)
+
+    def test_setting_the_same_value_is_not_a_change(self):
+        c = self._cache()
+        c.set("k", [1, 2, 3])
+        c.save()
+        first = c.path.stat().st_mtime_ns
+        c.set("k", [1, 2, 3])
+        c.save()
+        self.assertEqual(c.path.stat().st_mtime_ns, first)
+
+    def test_a_real_change_is_written(self):
+        from nexus.cache import JsonCache
+        c = self._cache()
+        c.set("k", [1, 2, 3])
+        c.save()
+        c.set("k2", [9])
+        c.save()
+        self.assertEqual(JsonCache(c.path).get("k2"), [9])
+
+    def test_a_changed_value_is_written(self):
+        from nexus.cache import JsonCache
+        c = self._cache()
+        c.set("k", [1])
+        c.save()
+        c.set("k", [2])
+        c.save()
+        self.assertEqual(JsonCache(c.path).get("k"), [2])
+
+    def test_a_never_saved_cache_still_writes_the_first_time(self):
+        """Skipping on 'not dirty' must not skip creating the file at all."""
+        c = self._cache()
+        c.save()
+        self.assertTrue(c.path.exists())
