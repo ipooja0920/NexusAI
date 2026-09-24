@@ -185,12 +185,23 @@ def parse_employees(raw) -> float:
 
 
 def distance_score(miles: Optional[float], decay: float) -> float:
-    if miles is None or miles == 0.0:
+    """exp(-miles/decay). Unknown distance scores 0.
+
+    Zero miles is NOT unknown - it is the best possible answer, and it used
+    to be lumped in with "no address" and scored 0.0. A company sitting in
+    Storrs scored the same on proximity as one we could not locate at all,
+    which inverted the entire point of a 25% distance weight. Only None
+    (and unparseable junk) means unknown.
+    """
+    if miles is None:
         return 0.0
     try:
-        return math.exp(-float(miles) / decay)
-    except Exception:
+        m = float(miles)
+    except (TypeError, ValueError):
         return 0.0
+    if m != m or m < 0:                       # NaN or nonsense
+        return 0.0
+    return math.exp(-m / decay)
 
 
 def employee_score(employees: float, cap: float) -> float:
@@ -409,6 +420,21 @@ def funding_score(funding_recent_usd: Optional[float],
         activity_part = neutral + (activity_part - neutral) * factor
 
     score = w * activity_part + (1.0 - w) * fit
+
+    # With no funding or R&D record, size_fit is the only term left - and
+    # size_fit is just revenue. Left unchecked that turned this column into
+    # a second revenue score: a regional insurer with $450m of premiums and
+    # no research of any kind read 0.70 for "can they fund research", while
+    # a $38m catalysis firm read 0.42. Revenue already carries its own
+    # weight, so this also counted it twice.
+    #
+    # Size can still show a company is a POOR target - a $60bn pharma does
+    # not need us - but it can never show one is a good one. So without
+    # evidence the score is capped at neutral: the giants keep their
+    # penalty, nobody is promoted for merely being large.
+    if activity is None:
+        score = min(score, cfg["missing_score"])
+
     score += university_adjustment(university_current, university_past,
                                    cfg["university"])
     return round(min(1.0, max(0.0, score)), 4)

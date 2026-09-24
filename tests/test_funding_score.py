@@ -205,6 +205,34 @@ class TestFundingScore(unittest.TestCase):
         self.assertEqual(funding_score(*args, CFG), funding_score(*args, CFG))
 
 
+class TestSizeAloneDoesNotEarnAFundingScore(unittest.TestCase):
+    """Without a funding or R&D record, size_fit is the only term left -
+    and size_fit is just revenue. Unchecked, that turned this column into a
+    second revenue score and let a company be promoted for being large."""
+
+    def test_a_large_company_with_no_research_is_only_neutral(self):
+        """A regional insurer with $450m of premiums read 0.70 for 'can
+        they fund research' and outranked a $38m catalysis firm."""
+        insurer = funding_score(None, None, 450.0, CFG)
+        self.assertEqual(insurer, CFG["missing_score"])
+
+    def test_the_giants_keep_their_penalty(self):
+        """The cap is one-directional. Size can still show a company is a
+        POOR target; it just cannot show one is a good target."""
+        self.assertLess(funding_score(None, None, 63_696.0, CFG),
+                        CFG["missing_score"])
+
+    def test_the_weak_middle_band_keeps_its_discount(self):
+        self.assertLess(funding_score(None, None, 40.0, CFG),
+                        CFG["missing_score"])
+
+    def test_evidence_lifts_a_company_above_the_cap(self):
+        """The cap applies only when there is nothing to go on."""
+        self.assertGreater(
+            funding_score(50e6, None, 450.0, CFG, years=[REC["fresh_year"]]),
+            CFG["missing_score"])
+
+
 class TestRecency(unittest.TestCase):
 
     def test_this_year_is_full_weight(self):

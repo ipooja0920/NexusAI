@@ -19,6 +19,7 @@ import time
 from datetime import datetime
 
 from nexus.cache import Caches
+from nexus.funding import company_funding_score
 from nexus.excel_io import (read_enriched, read_faculty, set_faculty_flag,
                             unique_path, write_faculty_output)
 from nexus.prefilter import embed_text, rank_by_similarity, select_candidates
@@ -43,23 +44,33 @@ def safe_filename(name: str) -> str:
     return "".join(c for c in name if c.isalnum() or c in " ._-").strip()
 
 
-def get_secondary_scores(client, cfg, caches, company: str, description):
-    """Partnership + funding scores, from cache when available."""
+def get_secondary_scores(client, cfg, caches, company: str, description,
+                         row: dict):
+    """Partnership (LLM) + funding (arithmetic).
+
+    Funding used to be a second LLM call, asked to judge from a company
+    description whether it had "R&D expenditure", "grant history" and
+    "government funding relationships". All three are now measured and
+    sitting in the workbook, so the guess has been replaced by the figures -
+    which also halves the number of API calls this function makes.
+    """
+    f_score, f_reason = company_funding_score(row, cfg.funding)
+    funding = {"score": f_score, "reason": f_reason}
+
     cached = caches.get_company_scores(company)
     if cached is not None:
-        return cached["partnership"], cached["funding"], True
+        # Only the PARTNERSHIP half is worth caching - it costs an API call.
+        # Funding is recomputed every run on purpose: it is free, and a
+        # cached copy would silently outlive the config change or the fresh
+        # Form D quarter that should have moved it.
+        return cached["partnership"], funding, True
 
     model = cfg.openai["scoring_model"]
-    retries = cfg.openai["max_retries"]
-    rate = cfg.openai["rate_limit_seconds"]
     p_score, p_reason = score_secondary(
         client, model, company, PARTNERSHIP_SYSTEM_PROMPT, description,
-        max_retries=retries, rate_limit=rate)
-    f_score, f_reason = score_secondary(
-        client, model, company, FUNDING_SYSTEM_PROMPT, description,
-        max_retries=retries, rate_limit=rate)
+        max_retries=cfg.openai["max_retries"],
+        rate_limit=cfg.openai["rate_limit_seconds"])
     partnership = {"score": p_score, "reason": p_reason}
-    funding = {"score": f_score, "reason": f_reason}
     caches.set_company_scores(company, partnership, funding)
     return partnership, funding, False
 
@@ -145,7 +156,7 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches,
     for k, gi in enumerate(top_secondary):
         c = companies[gi]
         partnership, funding, was_cached = get_secondary_scores(
-            client, cfg, caches, c["company"], c.get("description"))
+            client, cfg, caches, c["company"], c.get("description"), c)
         secondary[gi] = {"partnership": partnership, "funding": funding}
         n_cache_hits += was_cached
         if (k + 1) % 10 == 0 or (k + 1) == len(top_secondary):
@@ -156,10 +167,17 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches,
     # ---------- Final weighted score ----------
     p_nums = [to_num(secondary[gi]["partnership"]["score"]) if gi in secondary else None
               for gi in range(n_companies)]
-    f_nums = [to_num(secondary[gi]["funding"]["score"]) if gi in secondary else None
-              for gi in range(n_companies)]
     p_norm = normalize(p_nums)
-    f_norm = normalize(f_nums)
+
+    # Funding is deliberately NOT normalised, unlike the LLM scores.
+    #
+    # normalize() is min-max across the candidate pool, which is the right
+    # move for a 1-9 rubric whose absolute level means little. The funding
+    # score already means something absolute: 0.5 is "we have no evidence",
+    # and above it is "we do". Min-maxing a pool where most companies sit at
+    # exactly 0.5 would stretch that flat line to fill 0..1 and manufacture
+    # a ranking out of nothing.
+    f_norm = {gi: secondary[gi]["funding"]["score"] for gi in secondary}
 
     overall = {}
     for gi in top_secondary:
@@ -169,7 +187,7 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches,
                        w["revenue"] * c["revenue_score"] +
                        w["alignment"] * align_norm[gi] +
                        w["partnership"] * p_norm[gi] +
-                       w["funding"] * f_norm[gi])
+                       w["funding"] * f_norm.get(gi, cfg.funding["missing_score"]))
 
     final_n = cfg.funnel["final_top_n"]
     final_ranked = sorted(overall, key=overall.get, reverse=True)[:final_n]

@@ -172,7 +172,9 @@ class TestCaching(PipelineTestCase):
             self.assertEqual(counts.get("alignment", 0), 16)
             # secondary scored once per company only, not once per faculty
             self.assertEqual(counts.get("partnership", 0), 8)
-            self.assertEqual(counts.get("funding", 0), 8)
+            # Funding is arithmetic now, not a second LLM call. Zero here is
+            # the point: it halves the API spend of a match run.
+            self.assertEqual(counts.get("funding", 0), 0)
         finally:
             p.__exit__()
 

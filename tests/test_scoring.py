@@ -59,9 +59,15 @@ class TestDistanceScore(unittest.TestCase):
     def test_missing_distance_scores_zero(self):
         self.assertEqual(distance_score(None, 400.0), 0.0)
 
-    def test_zero_distance_scores_zero(self):
-        # Carried over from v1: distance 0 means "no data", not "on campus".
-        self.assertEqual(distance_score(0.0, 400.0), 0.0)
+    def test_zero_distance_is_on_campus_not_no_data(self):
+        """Reversed from v1, where 0.0 was the sentinel for "no distance".
+
+        It is not any more: distance_miles() returns None when it cannot
+        locate a company, and enrich_companies initialises dist to None. So
+        0.0 can only mean a genuine zero-mile distance - and treating the
+        best possible answer as the worst inverted the 25% distance weight
+        for anything sitting in Storrs."""
+        self.assertEqual(distance_score(0.0, 400.0), 1.0)
 
     def test_decay_shape(self):
         near = distance_score(10, 400.0)
@@ -170,6 +176,29 @@ class TestParseScoreReason(unittest.TestCase):
 
     def test_unexpected_score_type_becomes_na(self):
         self.assertEqual(_parse_score_reason('{"score":{"a":1},"reason":"r"}')[0], "NA")
+
+
+class TestDistanceAtTheReferencePoint(unittest.TestCase):
+    """Zero miles is the BEST answer, not a missing one."""
+
+    def test_zero_miles_is_the_top_score(self):
+        """A company in Storrs used to score 0.0 for proximity - the same
+        as one we could not locate at all - because `miles == 0.0` was
+        lumped in with `miles is None`. That inverted the whole point of a
+        25% distance weight."""
+        self.assertEqual(distance_score(0.0, 400.0), 1.0)
+
+    def test_unknown_distance_still_scores_zero(self):
+        self.assertEqual(distance_score(None, 400.0), 0.0)
+
+    def test_zero_beats_any_real_distance(self):
+        self.assertGreater(distance_score(0.0, 400.0),
+                           distance_score(1.0, 400.0))
+
+    def test_nan_and_junk_are_unknown(self):
+        self.assertEqual(distance_score(float("nan"), 400.0), 0.0)
+        self.assertEqual(distance_score("-", 400.0), 0.0)
+        self.assertEqual(distance_score(-5.0, 400.0), 0.0)
 
 
 if __name__ == "__main__":

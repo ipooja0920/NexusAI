@@ -158,6 +158,51 @@ def funding_columns(key: str, caches: dict) -> dict:
     }
 
 
+def company_funding_score(company: dict, cfg: dict) -> tuple:
+    """(score, reason) for one enriched company row.
+
+    The bridge between the workbook and nexus.scoring.funding_score: pulls
+    the figures and the dates out of a row and returns a score plus a short
+    human-readable justification.
+
+    The reason string matters as much as the number. It replaced an LLM
+    sentence in the same column, and a bare 0.74 with nothing behind it is
+    less useful than the guess it replaced - so it names the evidence.
+    """
+    from nexus.scoring import (_nonblank, _year, funding_score,
+                               recency_factor)
+
+    recent = company.get("funding_recent_usd")
+    rd = company.get("rd_expense_usd")
+    revenue = company.get("revenue_usdmm")
+    years = [company.get("formd_last_year"),
+             company.get("sbir_last_year"),
+             company.get("rd_expense_year")]
+    current = company.get("university_current")
+    past = company.get("university_past")
+
+    score = funding_score(recent, rd, revenue, cfg, years=years,
+                          university_current=current, university_past=past)
+
+    bits = []
+    if not _is_missing(recent):
+        bits.append(f"${float(recent)/1e6:,.1f}m raised recently")
+    if not _is_missing(rd):
+        bits.append(f"${float(rd)/1e6:,.0f}m R&D")
+    if not _is_missing(revenue):
+        bits.append(f"${float(revenue):,.0f}m revenue")
+    known = [y for y in (_year(v) for v in years) if y is not None]
+    if known:
+        bits.append(f"latest {max(known)}")
+    if _nonblank(current):
+        bits.append("already has a university partner")
+    if _nonblank(past):
+        bits.append("previous university ties")
+    if not bits:
+        return score, "No funding, R&D or revenue record found."
+    return score, "; ".join(bits) + "."
+
+
 def _is_missing(value) -> bool:
     """True when a numeric cell carries no usable figure.
 
