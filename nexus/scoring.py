@@ -289,10 +289,80 @@ def size_fit(revenue_usdmm: Optional[float], researching: bool,
     return 0.0
 
 
+def _year(value) -> Optional[int]:
+    """A four-digit year, or None. Tolerates NaN, floats and strings."""
+    if value is None:
+        return None
+    try:
+        y = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return y if 1900 <= y <= 2100 else None
+
+
+def recency_factor(years, cfg: dict) -> float:
+    """How much to trust a funding figure, given WHEN it was reported.
+
+    A dollar figure alone does not say whether a company can fund research
+    now. Money raised in 2019 was spent in 2019. This scales the activity
+    signal by how fresh the most recent evidence is, so a company that
+    raised last year outranks one that raised four years ago on the same
+    amount.
+
+    The most recent year across all sources wins: a company still filing
+    Form D is current whether or not its SBIR awards stopped in 2011.
+    """
+    known = [y for y in (_year(v) for v in years) if y is not None]
+    if not known:
+        return cfg["stale"]          # no date at all - treat as old, not fresh
+    latest = max(known)
+    if latest >= cfg["fresh_year"]:
+        return cfg["fresh"]
+    if latest >= cfg["fresh_year"] - 1:
+        return cfg["recent"]
+    return cfg["stale"]
+
+
+def university_adjustment(current, past, cfg: dict) -> float:
+    """A signed nudge for existing academic ties.
+
+    The two directions are deliberately opposite, and the asymmetry is the
+    point:
+
+      * a CURRENT university partner counts AGAINST a company. The budget
+        and the appetite are already spoken for, so there is less room for
+        a new partnership - which is what we are looking for.
+
+      * a PAST tie counts slightly FOR it. The company has worked with
+        academia before, knows how a sponsored-research agreement works,
+        and is not starting from scratch. Slightly - a finished
+        relationship is weaker evidence than a live one is an obstacle.
+    """
+    adj = 0.0
+    if _nonblank(current):
+        adj += cfg["current_penalty"]
+    if _nonblank(past):
+        adj += cfg["past_bonus"]
+    return adj
+
+
+def _nonblank(value) -> bool:
+    """True when a text cell actually holds something. NaN is truthy in
+    Python, so a plain `if value` reports every blank cell as populated."""
+    if value is None:
+        return False
+    if isinstance(value, float) and value != value:      # NaN
+        return False
+    return str(value).strip() not in ("", "-", "nan", "None")
+
+
 def funding_score(funding_recent_usd: Optional[float],
                   rd_expense_usd: Optional[float],
                   revenue_usdmm: Optional[float],
-                  cfg: dict) -> float:
+                  cfg: dict,
+                  years=(),
+                  university_current=None,
+                  university_past=None) -> float:
     """Can this company pay for research, and is it the right size to want to?
 
     Replaces an LLM judgement of the same question. Every input here is a
@@ -321,7 +391,27 @@ def funding_score(funding_recent_usd: Optional[float],
     # push down the 98% we know nothing about instead of lifting the 2% we
     # have evidence for.
     activity_part = activity if activity is not None else cfg["missing_score"]
-    return round(w * activity_part + (1.0 - w) * fit, 4)
+
+    # Age the evidence by pulling it TOWARDS NEUTRAL, not towards zero.
+    #
+    # Multiplying by the factor was the obvious thing and it was wrong:
+    # Bristol-Myers, with $9.95bn of undated R&D, scored 0.15 against 0.30
+    # for an identical company with no R&D data at all. Evidence must never
+    # leave a company worse off than having none.
+    #
+    # Shrinking towards missing_score says the honest thing instead - old
+    # money is a weaker claim, not a mark against. A stale $200m raise still
+    # beats an unknown; a fresh figure is untouched; and a genuinely tiny
+    # raise still reads as tiny rather than being laundered up to neutral.
+    if activity is not None:
+        neutral = cfg["missing_score"]
+        factor = recency_factor(years, cfg["recency"])
+        activity_part = neutral + (activity_part - neutral) * factor
+
+    score = w * activity_part + (1.0 - w) * fit
+    score += university_adjustment(university_current, university_past,
+                                   cfg["university"])
+    return round(min(1.0, max(0.0, score)), 4)
 
 
 def normalize(values: List[Optional[float]]) -> List[float]:

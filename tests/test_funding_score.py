@@ -13,12 +13,15 @@ from __future__ import annotations
 import math
 import unittest
 
-from nexus.scoring import funding_score, log_score, size_fit
+from nexus.scoring import (funding_score, log_score, recency_factor,
+                           size_fit, university_adjustment)
 from nexus.settings import Settings
 
 CFG = Settings().funding
 SIZE = CFG["size_fit"]
 ACT = CFG["activity"]
+REC = CFG["recency"]
+UNI = CFG["university"]
 
 
 class TestLogScore(unittest.TestCase):
@@ -127,8 +130,33 @@ class TestFundingScore(unittest.TestCase):
                          CFG["missing_score"])
 
     def test_a_heavily_funded_pre_revenue_biotech_tops_out(self):
-        """Neumora: no revenue, $474m raised, $176m R&D."""
-        self.assertEqual(funding_score(474.4e6, 176e6, 0.0, CFG), 1.0)
+        """Neumora: no revenue, $474m raised, $176m R&D, reported this year."""
+        self.assertEqual(
+            funding_score(474.4e6, 176e6, 0.0, CFG, years=[REC["fresh_year"]]),
+            1.0)
+
+    def test_the_same_figures_without_a_date_do_not_top_out(self):
+        """An undated figure is a weaker claim than a dated one, so it must
+        not score the same. It still beats knowing nothing."""
+        undated = funding_score(474.4e6, 176e6, 0.0, CFG)
+        self.assertLess(undated, 1.0)
+        self.assertGreater(undated, CFG["missing_score"])
+
+    def test_stale_evidence_still_beats_no_evidence(self):
+        """The rule that broke first: multiplying towards zero made
+        Bristol-Myers, with $9.95bn of undated R&D, score BELOW an identical
+        company with no R&D data at all. Evidence must never leave a company
+        worse off than having none."""
+        blind = funding_score(None, None, 49_186.0, CFG)
+        stale = funding_score(None, 9_951e6, 49_186.0, CFG, years=[2019])
+        self.assertGreater(stale, blind)
+
+    def test_a_tiny_raise_is_not_laundered_up_to_neutral(self):
+        """Shrinking towards neutral must not erase what we DO know. A
+        company whose only raise was $100k still reads as tiny."""
+        tiny = funding_score(100_000, None, 40.0, CFG,
+                             years=[REC["fresh_year"]])
+        self.assertLess(tiny, CFG["missing_score"])
 
     def test_the_giants_rank_below_the_biotechs(self):
         """Pfizer outscoring a clinical-stage biotech would invert the
@@ -175,6 +203,95 @@ class TestFundingScore(unittest.TestCase):
         """It replaced an LLM call. Same inputs, same answer, every time."""
         args = (12_345_678, 9_876_543, 42.0)
         self.assertEqual(funding_score(*args, CFG), funding_score(*args, CFG))
+
+
+class TestRecency(unittest.TestCase):
+
+    def test_this_year_is_full_weight(self):
+        self.assertEqual(recency_factor([REC["fresh_year"]], REC), REC["fresh"])
+        self.assertEqual(recency_factor([REC["fresh_year"] + 1], REC),
+                         REC["fresh"])
+
+    def test_last_year_is_discounted(self):
+        self.assertEqual(recency_factor([REC["fresh_year"] - 1], REC),
+                         REC["recent"])
+
+    def test_old_money_is_heavily_discounted(self):
+        """Money awarded in 2011 was spent in 2011."""
+        self.assertEqual(recency_factor([2011], REC), REC["stale"])
+
+    def test_no_date_is_treated_as_old_not_fresh(self):
+        self.assertEqual(recency_factor([], REC), REC["stale"])
+        self.assertEqual(recency_factor([None, float("nan"), "-"], REC),
+                         REC["stale"])
+
+    def test_the_most_recent_source_wins(self):
+        """A company still filing Form D is current whether or not its SBIR
+        awards stopped fifteen years ago."""
+        self.assertEqual(recency_factor([2011, 2003, REC["fresh_year"]], REC),
+                         REC["fresh"])
+
+    def test_same_amount_ranks_by_freshness(self):
+        fresh = funding_score(200e6, None, 2.0, CFG, years=[REC["fresh_year"]])
+        old = funding_score(200e6, None, 2.0, CFG, years=[2021])
+        self.assertGreater(fresh, old)
+
+    def test_an_unknown_company_is_not_pushed_below_neutral(self):
+        """Recency ages real evidence. A company we know nothing about is
+        already at the neutral score and must not be penalised AGAIN for
+        having no date to go with the data it does not have."""
+        self.assertEqual(funding_score(None, None, None, CFG, years=[]),
+                         CFG["missing_score"])
+
+
+class TestUniversityTies(unittest.TestCase):
+
+    def test_a_current_partner_counts_against(self):
+        """The budget and the appetite are already spoken for."""
+        self.assertEqual(university_adjustment("Dartmouth College", None, UNI),
+                         UNI["current_penalty"])
+
+    def test_a_past_tie_counts_slightly_for(self):
+        self.assertEqual(university_adjustment(None, "Boston University", UNI),
+                         UNI["past_bonus"])
+
+    def test_the_two_directions_are_opposite(self):
+        """The asymmetry IS the rule: a live relationship is an obstacle,
+        a finished one is a credential."""
+        self.assertLess(UNI["current_penalty"], 0)
+        self.assertGreater(UNI["past_bonus"], 0)
+        self.assertGreater(abs(UNI["current_penalty"]), UNI["past_bonus"])
+
+    def test_a_past_tie_does_not_cancel_a_current_one(self):
+        both = university_adjustment("Dartmouth", "BU", UNI)
+        self.assertLess(both, 0)
+
+    def test_blank_and_nan_are_not_ties(self):
+        """NaN is truthy in Python - a plain `if value` reports every blank
+        cell as a university partnership."""
+        for blank in (None, float("nan"), "", "   ", "-", "nan"):
+            self.assertEqual(university_adjustment(blank, blank, UNI), 0.0)
+
+    def test_a_current_tie_lowers_the_score(self):
+        base = funding_score(20e6, None, 2.0, CFG, years=[REC["fresh_year"]])
+        tied = funding_score(20e6, None, 2.0, CFG, years=[REC["fresh_year"]],
+                             university_current="Dartmouth College")
+        self.assertLess(tied, base)
+
+    def test_a_past_tie_raises_it_a_little(self):
+        base = funding_score(20e6, None, 2.0, CFG, years=[REC["fresh_year"]])
+        tied = funding_score(20e6, None, 2.0, CFG, years=[REC["fresh_year"]],
+                             university_past="Boston University")
+        self.assertGreater(tied, base)
+        self.assertLess(tied - base, 0.10)
+
+    def test_the_adjustment_cannot_push_out_of_range(self):
+        top = funding_score(1e9, 1e10, 150.0, CFG, years=[REC["fresh_year"]],
+                            university_past="BU")
+        self.assertLessEqual(top, 1.0)
+        bottom = funding_score(None, None, 999_999.0, CFG,
+                               university_current="Dartmouth")
+        self.assertGreaterEqual(bottom, 0.0)
 
 
 if __name__ == "__main__":

@@ -37,7 +37,7 @@ SOURCES = {
 #: Columns appended to every company row, in the order they appear.
 FUNDING_COLUMNS = [
     # money, per source and combined
-    "formd_recent_usd", "formd_total_usd", "formd_by_year",
+    "formd_recent_usd", "formd_total_usd", "formd_by_year", "formd_last_year",
     "sbir_recent_usd", "sbir_total_usd", "sbir_by_year",
     "funding_recent_usd", "funding_total_usd", "funding_sources",
     # federal award track record
@@ -119,6 +119,9 @@ def funding_columns(key: str, caches: dict) -> dict:
         "formd_recent_usd": formd_recent,
         "formd_total_usd": formd_total,
         "formd_by_year": fd.get("by_year") or None,
+        # Exposed so the score can ask "is this money RECENT?" without
+        # parsing the by_year string. Money raised in 2019 was spent in 2019.
+        "formd_last_year": fd.get("last_raise_year"),
         "sbir_recent_usd": sbir_recent,
         "sbir_total_usd": sbir_total,
         "sbir_by_year": sb.get("sbir_by_year") or None,

@@ -110,6 +110,9 @@ class Settings:
             "size_fit": {"small_max": 5, "small_no_research": 0.15,
                          "dip": 0.30, "sweet_lo": 100, "sweet_hi": 1000,
                          "taper_zero": 5000, "missing_score": 0.5},
+            "recency": {"fresh_year": 2025, "fresh": 1.0,
+                        "recent": 0.6, "stale": 0.25},
+            "university": {"current_penalty": -0.15, "past_bonus": 0.05},
             "missing_score": 0.5, "weight_activity": 0.6,
         }
 

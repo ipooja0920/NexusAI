@@ -117,6 +117,19 @@ funding:
     taper_zero:         5000        # linear to 0 above $1bn
     missing_score:       0.5        # no revenue AND no research signal
 
+  # How much a figure is trusted given WHEN it was reported. Money raised
+  # in 2019 was spent in 2019. The most recent year across all sources wins.
+  recency:
+    fresh_year:         2025        # this year or later -> full weight
+    fresh:               1.0
+    recent:              0.6        # the year before
+    stale:               0.25       # older, or no date at all
+
+  # Existing academic ties, deliberately opposite in sign.
+  university:
+    current_penalty:   -0.15        # already partnered - less room for us
+    past_bonus:         0.05        # knows how this works - but modest
+
   # Absence of a filing is not evidence of poverty - see funding_score.
   missing_score:         0.5
   # score = weight_activity * activity + (1 - weight_activity) * size_fit
