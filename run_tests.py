@@ -21,6 +21,7 @@ SUITES = [
     ("Pre-filter & geocoding", "tests.test_prefilter"),
     ("Company-name matching", "tests.test_matching"),
     ("Funding join", "tests.test_funding_join"),
+    ("Funding score", "tests.test_funding_score"),
     ("End-to-end pipeline", "tests.test_pipeline"),
 ]
 

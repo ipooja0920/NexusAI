@@ -100,6 +100,20 @@ class Settings:
     def components(self) -> dict: return self.raw["components"]
 
     @property
+    def funding(self) -> dict:
+        """Funding-score thresholds. Defaults kept here so an older
+        config.yaml without a `funding:` block still scores rather than
+        raising KeyError halfway through a run."""
+        return self.raw.get("funding") or {
+            "activity": {"recent_lo": 100000, "recent_hi": 100000000,
+                         "rd_lo": 1000000, "rd_hi": 1000000000},
+            "size_fit": {"small_max": 5, "small_no_research": 0.15,
+                         "dip": 0.30, "sweet_lo": 100, "sweet_hi": 1000,
+                         "taper_zero": 5000, "missing_score": 0.5},
+            "missing_score": 0.5, "weight_activity": 0.6,
+        }
+
+    @property
     def geocoding(self) -> dict: return self.raw["geocoding"]
 
     def require_openai_key(self) -> str:

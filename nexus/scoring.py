@@ -213,6 +213,117 @@ def revenue_score(value: Optional[float], cfg: dict) -> float:
     return 0.0
 
 
+def log_score(value: Optional[float], lo: float, hi: float) -> Optional[float]:
+    """Position of `value` between `lo` and `hi` on a LOG scale, 0.0-1.0.
+
+    Returns None when there is no figure, which is different from 0.0:
+    0.0 means "we know it is tiny", None means "we have no record". The
+    caller decides what absence is worth - see funding_score.
+
+    Log rather than linear because these figures span five orders of
+    magnitude: $50k at the 1st percentile, $261m at the 99th. Scored
+    linearly against the maximum, the MEDIAN company reads 0.011 and the
+    whole component stops discriminating.
+    """
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if v != v or v <= 0:                      # NaN, zero or negative
+        return None
+    if v <= lo:
+        return 0.0
+    if v >= hi:
+        return 1.0
+    return (math.log10(v) - math.log10(lo)) / (math.log10(hi) - math.log10(lo))
+
+
+def size_fit(revenue_usdmm: Optional[float], researching: bool,
+             cfg: dict) -> float:
+    """How well a company's SIZE fits a sponsored-research partner, 0.0-1.0.
+
+    Deliberately not monotonic. The biggest companies are the worst targets,
+    not the best: Pfizer has the money and no need of us. Two shapes score
+    well, and the band between them is the weakest:
+
+      * small and doing research - pre-revenue biotech living on raised
+        money, which is exactly who partners with a university
+      * established but not enormous - has a budget, still needs outside
+        capability
+
+    `researching` is what separates a pre-revenue research company from a
+    small business with no research at all. Without it, every tiny company
+    in the datasource would score full marks.
+    """
+    # 71% of the datasource has no revenue figure. Absence is not evidence
+    # of smallness, so the research signal decides; with nothing at all to
+    # go on, stay neutral rather than guess.
+    #
+    # Note the NaN test. pandas reads a blank cell as NaN, NaN is not None,
+    # and EVERY comparison against NaN is False - so a plain `is None` check
+    # falls through the whole ladder and returns 0.0. That scored 15,275
+    # companies 0.30 instead of 0.50 on the first real run.
+    r = None
+    if revenue_usdmm is not None:
+        try:
+            r = float(revenue_usdmm)
+        except (TypeError, ValueError):
+            r = None
+        else:
+            if r != r:                        # NaN
+                r = None
+    if r is None:
+        return 1.0 if researching else cfg["missing_score"]
+
+    if r < cfg["small_max"]:
+        return 1.0 if researching else cfg["small_no_research"]
+    if r < cfg["sweet_lo"]:
+        return cfg["dip"]
+    if r <= cfg["sweet_hi"]:
+        return 1.0
+    if r < cfg["taper_zero"]:
+        span = cfg["taper_zero"] - cfg["sweet_hi"]
+        return max(0.0, 1.0 - (r - cfg["sweet_hi"]) / span)
+    return 0.0
+
+
+def funding_score(funding_recent_usd: Optional[float],
+                  rd_expense_usd: Optional[float],
+                  revenue_usdmm: Optional[float],
+                  cfg: dict) -> float:
+    """Can this company pay for research, and is it the right size to want to?
+
+    Replaces an LLM judgement of the same question. Every input here is a
+    figure from a filing - a Form D raise, an SBIR award, an XBRL R&D line -
+    so the answer is reproducible and can be traced back to a document.
+
+    Two kinds of evidence, combined with max() rather than a sum or a mean:
+    they are independent signals of the same capacity, and a company should
+    not be marked down for having only one. Big pharma files no Form D
+    because it raises no private capital; a biotech that just closed a
+    Series B reports no R&D line. Averaging would halve both.
+    """
+    act = cfg["activity"]
+    activity_signals = [
+        s for s in (log_score(funding_recent_usd, act["recent_lo"], act["recent_hi"]),
+                    log_score(rd_expense_usd, act["rd_lo"], act["rd_hi"]))
+        if s is not None
+    ]
+    activity = max(activity_signals) if activity_signals else None
+    fit = size_fit(revenue_usdmm, bool(activity_signals), cfg["size_fit"])
+
+    w = cfg["weight_activity"]
+    # No activity figure at all -> neutral on that half, NOT zero. Absence of
+    # a Form D filing means we found no record, not that a company has no
+    # money; most established companies never file one. Scoring it zero would
+    # push down the 98% we know nothing about instead of lifting the 2% we
+    # have evidence for.
+    activity_part = activity if activity is not None else cfg["missing_score"]
+    return round(w * activity_part + (1.0 - w) * fit, 4)
+
+
 def normalize(values: List[Optional[float]]) -> List[float]:
     """Min-max normalize; None -> 0.0. Constant series -> all 0.0."""
     nums = [v for v in values if v is not None]

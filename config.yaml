@@ -92,6 +92,36 @@ components:
     rev_high_zero: 1000.0
     rev_missing_score: 0.5
 
+# --------- Funding score ---------------------------------------------
+# Replaces an LLM judgement with arithmetic over figures from filings.
+# Every threshold lives here so the shape can be retuned without code.
+funding:
+  # "Active funding, high value" - where each signal reads 0.0 and 1.0.
+  # Two separate scales because the figures are not comparable: raising
+  # $100m is a large round, while SPENDING $100m a year on R&D is ordinary
+  # for a mid-size pharma. A shared scale would max out every public company.
+  activity:
+    recent_lo:        100000        # $100k raised  -> 0.0
+    recent_hi:     100000000        # $100m raised  -> 1.0
+    rd_lo:           1000000        # $1m  R&D      -> 0.0
+    rd_hi:        1000000000        # $1bn R&D      -> 1.0
+
+  # Size fit, in $USDmm. NOT monotonic - the biggest companies are the
+  # worst targets, not the best. Peaks at both ends of the barbell.
+  size_fit:
+    small_max:             5        # under $5m + doing research -> 1.0
+    small_no_research:  0.15        # under $5m, no research     -> 0.15
+    dip:                0.30        # $5m-$100m, the weak band
+    sweet_lo:            100        # $100m ... has a budget
+    sweet_hi:           1000        # ... $1bn, still needs us   -> 1.0
+    taper_zero:         5000        # linear to 0 above $1bn
+    missing_score:       0.5        # no revenue AND no research signal
+
+  # Absence of a filing is not evidence of poverty - see funding_score.
+  missing_score:         0.5
+  # score = weight_activity * activity + (1 - weight_activity) * size_fit
+  weight_activity:       0.6
+
 # --------- Geocoding -------------------------------------------------
 geocoding:
   reference_point: [41.8073, -72.2536]   # UConn Storrs
