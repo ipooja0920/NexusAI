@@ -35,7 +35,10 @@ and SBIR freezes the address as at each award.
 Columns added:
 
   sbir_match_name      the SBIR company attached, as SBIR spells it
-  sbir_match_by        name | website | ambiguous
+  sbir_match_by        name | name+suffix | website | ambiguous
+                       (name+suffix: names match, websites differ, legal
+                       suffix agrees - e.g. a subsidiary listed under its
+                       parent's website)
   sbir_awarded         Yes if the company has ever had an SBIR/STTR award,
                        No if not, blank if the match was ambiguous
   sbir_active_usd      sum of awards whose contract is still running
@@ -66,8 +69,9 @@ from pathlib import Path
 import pandas as pd
 from openpyxl.utils import column_index_from_string
 
-from nexus.matching import (match_confidence, normalise_company_name,
-                            state_code, state_from_address, website_domain)
+from nexus.matching import (is_too_generic, legal_suffix, match_confidence,
+                            normalise_company_name, state_code,
+                            state_from_address, website_domain)
 from nexus.settings import Settings
 
 SBIR_COLUMNS = [
@@ -200,6 +204,20 @@ def match_one(name, website, address, sbir, by_name, by_domain) -> tuple:
         s = sbir[cands[0]]
         conf = match_confidence(key, our_state, s["states"], our_domain, s["domains"])
         if conf == "suspect":
+            # The websites disagree - normally a sign of two different
+            # companies sharing a name (Casimir, LLC at casimirtrials.com vs
+            # CASIMIR, INC at casimirspace.com). But Capital IQ often lists a
+            # subsidiary under its PARENT's website: NeuroFlow, Inc. shows
+            # quartethealth.com. A matching legal suffix breaks the tie.
+            #
+            # It never overrides the too-generic rule: "ACT Group, Inc." and
+            # "Act Inc" share a suffix and are still not safe to join.
+            websites_differ = bool(our_domain and s["domains"]
+                                   and our_domain not in s["domains"])
+            our_sfx, their_sfx = legal_suffix(name), legal_suffix(s["name"])
+            if (websites_differ and not is_too_generic(key)
+                    and our_sfx and our_sfx == their_sfx):
+                return cands[0], "name+suffix", None
             return None, "rejected", s["name"]
         return cands[0], "name", None
 
@@ -284,10 +302,11 @@ def main() -> int:
         raise PermissionError(f"Could not write {out_path.name} - is it open "
                               "in Excel? Close it and re-run.") from e
 
-    matched = how_counts["name"] + how_counts["website"]
+    matched = how_counts["name"] + how_counts["name+suffix"] + how_counts["website"]
     s = combined
     print(f"\n  SBIR matched           {matched:>7,}")
     print(f"    by name              {how_counts['name']:>7,}")
+    print(f"    by name+suffix       {how_counts['name+suffix']:>7,}   (websites differ, legal suffix agrees)")
     print(f"    by website           {how_counts['website']:>7,}")
     print(f"  ambiguous (by eye)     {how_counts['ambiguous']:>7,}")
     print(f"  rejected (websites disagree / too generic) {how_counts['rejected']:>4,}")

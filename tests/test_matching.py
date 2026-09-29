@@ -295,3 +295,33 @@ class TestMatchConfidence(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLegalSuffix(unittest.TestCase):
+    """legal_suffix breaks a tie when names match but websites disagree -
+    e.g. a subsidiary Capital IQ lists under its parent's website."""
+
+    def test_spelling_variants_compare_equal(self):
+        from nexus.matching import legal_suffix
+        self.assertEqual(legal_suffix("NeuroFlow, Inc."), legal_suffix("NEUROFLOW INC"))
+        self.assertEqual(legal_suffix("Acme Incorporated"), "inc")
+        self.assertEqual(legal_suffix("Acme Corporation"), legal_suffix("Acme Corp."))
+
+    def test_different_forms_differ(self):
+        """Casimir, LLC and CASIMIR, INC are two different companies."""
+        from nexus.matching import legal_suffix
+        self.assertNotEqual(legal_suffix("Casimir, LLC"), legal_suffix("CASIMIR, INC"))
+
+    def test_only_the_last_word_counts(self):
+        """'Kadmon Corporation, LLC' is an LLC, not a corporation."""
+        from nexus.matching import legal_suffix
+        self.assertEqual(legal_suffix("Kadmon Corporation, LLC"), "llc")
+
+    def test_trailing_the_is_skipped(self):
+        from nexus.matching import legal_suffix
+        self.assertEqual(legal_suffix("Althexis Company, The"), "co")
+
+    def test_no_suffix_is_none(self):
+        from nexus.matching import legal_suffix
+        for n in ("Shade", "", None, "Company Name Without Form"):
+            self.assertIsNone(legal_suffix(n))

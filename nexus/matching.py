@@ -58,6 +58,41 @@ def normalise_company_name(name: Optional[str]) -> str:
     return " ".join(parts).strip()
 
 
+# Legal forms, grouped so spelling variants compare equal.
+_LEGAL_FORMS = {
+    "inc": "inc", "incorporated": "inc",
+    "llc": "llc", "lc": "llc",
+    "corp": "corp", "corporation": "corp",
+    "ltd": "ltd", "limited": "ltd",
+    "co": "co", "company": "co",
+    "lp": "lp", "llp": "llp", "plc": "plc",
+}
+
+
+def legal_suffix(name: Optional[str]) -> Optional[str]:
+    """The company's legal form - 'inc', 'llc', 'corp', ... - or None.
+
+    Read from the END of the raw name, before normalise_company_name strips
+    it. "NeuroFlow, Inc." and "NEUROFLOW INC" both give 'inc'; "Casimir,
+    LLC" gives 'llc' and "CASIMIR, INC" gives 'inc'.
+
+    Weak evidence on its own: among matches confirmed by a shared website,
+    5% still differ in suffix (Covaris, LLC = COVARIS, INC.), because
+    companies convert. So it is only ever a tie-breaker, never a reason to
+    reject by itself.
+    """
+    if not name:
+        return None
+    words = re.sub(r"[^a-z ]", " ", str(name).lower()).split()
+    for w in reversed(words):
+        if w in _LEGAL_FORMS:
+            return _LEGAL_FORMS[w]
+        if w not in ("the",):
+            # the legal form is the LAST real word; stop at anything else
+            return None
+    return None
+
+
 def is_too_generic(key: str) -> bool:
     """True when a name is short or common enough that an exact match could
     plausibly be a different company.

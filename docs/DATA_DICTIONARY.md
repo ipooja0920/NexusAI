@@ -26,9 +26,9 @@ Built by `combine_companies.py` from `data/input/companies_raw.xlsx` and
 | Field | Type | Meaning | How it's derived | Example | Filled |
 |---|---|---|---|---|---|
 | employees_source | text | Where the employee count came from | `Capital IQ` if Capital IQ had a figure; `SBIR (year)` if filled from the company's most recent SBIR award that reports a headcount; blank if neither | `SBIR (2023)` | 1,010 |
-| sbir_match_name | text | The SBIR company attached to this row, as SBIR spells it | Copied from SBIR. For an ambiguous match, lists the candidates | `AGILIX INC` | 1,063 |
-| sbir_match_by | text | How the match was made | `name` — normalised names are equal; `website` — no name match but the website domain belongs to exactly one SBIR company; `ambiguous` — one name, several SBIR companies, nothing attached | `name` | 1,063 |
-| sbir_awarded | Yes / No | Has the company ever had an SBIR or STTR award | `Yes` if matched; `No` if not; blank for the ambiguous row | `Yes` | 21,805 |
+| sbir_match_name | text | The SBIR company attached to this row, as SBIR spells it | Copied from SBIR. For an ambiguous match, lists the candidates | `AGILIX INC` | 1,066 |
+| sbir_match_by | text | How the match was made | `name` — normalised names are equal; `website` — no name match but the website domain belongs to exactly one SBIR company; `name+suffix` — names match and websites differ, but the legal suffix (Inc / LLC / Ltd…) agrees; `ambiguous` — one name, several SBIR companies, nothing attached | `name` | 1,066 |
+| sbir_awarded | Yes / No | Has the company ever had an SBIR or STTR award | `Yes` if matched; `No` if not; blank for the ambiguous row | `Yes` | 21,805 (1,065 Yes) |
 | sbir_active_usd | number (USD) | Money on awards still running | Sum of `award_amount` over awards with `award_active_today = True`. Full award value — not what is left unspent | `551373` | 76 |
 | sbir_active_until | date | When the company's SBIR money runs out | Latest `contract_end_date` among active awards | `2027-07-31` | 76 |
 | sbir_agencies | text | Which agencies funded it, and how often | Every award, active or ended, counted per agency, most first | `Department of Energy (4); National Science Foundation (1)` | 1,062 |
@@ -43,6 +43,10 @@ Built by `combine_companies.py` from `data/input/companies_raw.xlsx` and
   picks one. If neither does, the row is `ambiguous` and nothing is attached.
 - **A match is rejected** only if the websites actively disagree, or the
   name is too generic on its own. A different state never rejects a match.
+- **Websites disagree but the legal suffix agrees** (NeuroFlow, Inc. =
+  NEUROFLOW INC) — accepted as `name+suffix`. This catches subsidiaries that
+  Capital IQ lists under their parent's website. It never overrides the
+  too-generic rule, so short acronyms like `ACT` or `DPD` stay rejected.
 
 ---
 
