@@ -1,34 +1,29 @@
 #!/usr/bin/env python3
-"""SBIR/STTR awards, cleaned and rolled up per company  ->  data/cache/sbir_clean.csv
+"""SBIR/STTR awards, cleaned  ->  data/cache/sbir_clean.csv
 
-One row per COMPANY. No Capital IQ here - this only turns the raw download
-into something clean enough to match against later.
+One row per AWARD. No Capital IQ here, and no rolling up per company -
+that happens later, at the Capital IQ step, straight from these rows.
 
-What it does:
+One row per award keeps each award's title, abstract, research partner and
+dates together. Rolling up per company lost that: a company row listed
+every partner across every active award, beside only its three newest
+abstracts, so it read as if several universities worked on one abstract.
 
-  1. Cleans every award row: money to a number, dates to dates, zip to five
-     digits, the "Stub" research-institution placeholder blanked out.
+What it does to each row:
 
-  2. Marks each award ACTIVE if its Contract End Date is today or later.
-     After that date nothing new can be charged to the award, so it is the
-     direct test of "money available now" - no guessing with a year window.
+  * money to a number, dates to dates, zip to five digits
+  * the "Stub" research-institution placeholder blanked out; institution
+    names otherwise kept exactly as written
+  * award_active_today = Contract End Date is today or later. After that
+    date nothing new can be charged to the award, so it is the direct test
+    of "money available now".
 
-  3. Rolls the awards up per company:
-       sbir_active_usd       sum of active awards
-       sbir_active_until     latest end date among active awards
-       sbir_total_usd        sum of every award, for reference
-       university_current    research institutions on ACTIVE awards
-       university_past       research institutions on ENDED awards only
-       award_titles          most recent titles   } for enriching the company
-       abstracts             most recent abstracts } description later
-
-Companies are grouped by UEI, the government's unique entity ID. UEI is
-blank on older awards (it replaced DUNS in 2022), so those rows borrow the
-UEI of the same company name from its newer awards. Without that, one
-company's old and new awards would split into two rows.
+UEI, the government's unique company ID, is blank on older awards (it
+replaced DUNS in 2022). Those rows borrow the UEI of the same company name
+from its newer awards, so all of one company's rows share one UEI.
 
 "Active" depends on the day this runs. Re-run it whenever award_data.csv
-is refreshed, and treat the printed "as of" date as part of the answer.
+is refreshed; the "as of" date is printed.
 
 Input:  data/sources/sbir/award_data.csv   (https://www.sbir.gov/awards)
 Output: data/cache/sbir_clean.csv
@@ -63,18 +58,11 @@ RAW_COLUMNS = [
 # 15,222 rows.
 NO_INSTITUTION = {"", "stub", "n/a", "na", "none", "nan", "-"}
 
-# Enough recent titles and abstracts to describe what a company works on,
-# without one busy company producing a cell too large for Excel to open
-# (limit 32,767 characters - one company has 1,974 awards).
-MAX_TITLES = 10
-MAX_ABSTRACTS = 3
 
 OUT_COLUMNS = [
-    "company", "uei", "company_website", "address", "city", "state", "zip",
-    "number_employees",
-    "sbir_active_usd", "sbir_active_until", "sbir_total_usd",
-    "university_current", "university_past",
-    "award_titles", "abstracts",
+    "company", "uei", "award_title", "abstract", "award_amount",
+    "award_year", "contract_end_date", "award_active_today", "ri_name",
+    "number_employees", "company_website", "address", "city", "state", "zip",
 ]
 
 
@@ -109,6 +97,10 @@ def load_awards(path: Path) -> pd.DataFrame:
         "ri_name": _text(raw["RI Name"]),
     })
     a.loc[a["ri_name"].str.lower().isin(NO_INSTITUTION), "ri_name"] = ""
+    # Names are otherwise kept exactly as SBIR wrote them. Recasing them
+    # turned "UNH" into "Unh" and "MIT" into "Mit", and one row per award
+    # has no need to reconcile spellings. That matters only when partners
+    # are counted per company, which happens at the Capital IQ step.
     a.loc[~a["zip"].str.fullmatch(r"\d{5}"), "zip"] = ""
     for col in ("company_website",):
         a.loc[a[col].str.lower().isin({"nan", "none", "n/a", "-"}), col] = ""
@@ -131,62 +123,6 @@ def assign_company_key(a: pd.DataFrame) -> pd.Series:
     return a["uei"].where(has, borrowed.fillna("NAME:" + norm))
 
 
-def _join(values, limit=None) -> str:
-    seen, out = set(), []
-    for v in values:
-        if v and v not in seen:
-            seen.add(v)
-            out.append(v)
-            if limit and len(out) >= limit:
-                break
-    return "; ".join(out)
-
-
-def roll_up(a: pd.DataFrame, today: pd.Timestamp) -> pd.DataFrame:
-    """Part 2: one row per company."""
-    a = a.copy()
-    a["active"] = a["contract_end_date"] >= today
-    # newest first, so "most recent" below is simply the first match
-    a["_order"] = a["contract_end_date"].fillna(
-        pd.to_datetime(a["award_year"].astype("Int64").astype(str) + "-12-31",
-                       errors="coerce"))
-    a = a.sort_values("_order", ascending=False, na_position="last")
-
-    rows = []
-    for key, g in a.groupby("_key", sort=False):
-        act = g[g["active"]]
-        first = lambda col: next((v for v in g[col] if v not in ("", None)
-                                  and not (isinstance(v, float) and v != v)),
-                                 "")
-        current = _join(act["ri_name"])
-        current_set = set(current.split("; ")) if current else set()
-        past = _join(v for v in g.loc[~g["active"], "ri_name"]
-                     if v not in current_set)
-        emp = g["number_employees"].dropna()
-        rows.append({
-            "company": g["company"].iloc[0],
-            "uei": "" if key.startswith("NAME:") else key,
-            "company_website": first("company_website"),
-            "address": first("address"),
-            "city": first("city"),
-            "state": first("state"),
-            "zip": first("zip"),
-            "number_employees": int(emp.iloc[0]) if len(emp) else None,
-            "sbir_active_usd": round(act["award_amount"].sum(), 2)
-                               if len(act) else None,
-            "sbir_active_until": act["contract_end_date"].max().date()
-                                 if len(act) else None,
-            "sbir_total_usd": round(g["award_amount"].sum(), 2),
-            "university_current": current,
-            "university_past": past,
-            "award_titles": _join(g["award_title"], MAX_TITLES),
-            "abstracts": " || ".join(
-                [x for x in dict.fromkeys(g["abstract"]) if x][:MAX_ABSTRACTS]),
-        })
-    out = pd.DataFrame(rows, columns=OUT_COLUMNS)
-    return out.sort_values("sbir_active_usd", ascending=False,
-                           na_position="last")
-
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Clean and roll up SBIR awards.")
@@ -205,25 +141,34 @@ def main() -> int:
     today = pd.Timestamp(date.today())
     print(f"\n=== NexusAI: clean SBIR awards ===  (as of {today.date()})\n")
     print(f"  reading {src}")
-    awards = load_awards(src)
-    awards["_key"] = assign_company_key(awards)
-    print(f"  awards                 {len(awards):>9,}")
+    a = load_awards(src)
+    key = assign_company_key(a)
+    a["uei"] = key.where(~key.str.startswith("NAME:"), "")
+    a["award_active_today"] = a["contract_end_date"] >= today
+    a["contract_end_date"] = a["contract_end_date"].dt.date
+    a["award_year"] = a["award_year"].astype("Int64")
+    a["number_employees"] = a["number_employees"].astype("Int64")
 
-    companies = roll_up(awards, today)
+    # a company's awards together, newest first
+    a["_key"] = key
+    a = a.sort_values(["_key", "contract_end_date", "award_year"],
+                      ascending=[True, False, False], na_position="last")
+    out = a[OUT_COLUMNS]
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     try:
-        companies.to_csv(dst, index=False, encoding="utf-8")
+        out.to_csv(dst, index=False, encoding="utf-8")
     except PermissionError as e:
         raise PermissionError(f"Could not write {dst.name} - is it open in "
                               "Excel? Close it and re-run.") from e
 
-    act = companies["sbir_active_usd"].notna()
-    print(f"  companies              {len(companies):>9,}")
-    print(f"    with an active award {act.sum():>9,}")
-    print(f"    university current   {(companies['university_current'] != '').sum():>9,}")
-    print(f"    university past only {((companies['university_past'] != '') & (companies['university_current'] == '')).sum():>9,}")
-    print(f"  active funding total   ${companies['sbir_active_usd'].sum()/1e9:>8,.2f}bn")
+    act = out["award_active_today"]
+    print(f"  awards                     {len(out):>9,}")
+    print(f"    active today             {act.sum():>9,}")
+    print(f"    with a research partner  {(out['ri_name'] != '').sum():>9,}")
+    print(f"    active AND a partner     {(act & (out['ri_name'] != '')).sum():>9,}")
+    print(f"    no end date (older)      {out['contract_end_date'].isna().sum():>9,}")
+    print(f"  companies (by UEI or name) {key.nunique():>9,}")
     print(f"\n  written: {dst}")
     print(f"  'active' means contract end date on or after {today.date()}.\n")
     return 0
