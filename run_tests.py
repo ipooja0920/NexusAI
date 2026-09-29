@@ -22,6 +22,7 @@ SUITES = [
     ("Company-name matching", "tests.test_matching"),
     ("Funding join", "tests.test_funding_join"),
     ("Funding score", "tests.test_funding_score"),
+    ("SBIR cleaning", "tests.test_clean_sbir"),
     ("End-to-end pipeline", "tests.test_pipeline"),
 ]
 

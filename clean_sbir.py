@@ -129,6 +129,28 @@ def assign_company_key(a: pd.DataFrame) -> pd.Series:
 
 
 
+def clean(src: Path, today) -> tuple:
+    """The whole cleaning, minus writing and printing: (awards, company_key).
+
+    `today` is passed in rather than read from the clock, so "active" can
+    be tested against a fixed date. main() passes the real one.
+    """
+    today = pd.Timestamp(today)
+    a = load_awards(src)
+    key = assign_company_key(a)
+    a["uei"] = key.where(~key.str.startswith("NAME:"), "")
+    a["award_active_today"] = a["contract_end_date"] >= today
+    a["contract_end_date"] = a["contract_end_date"].dt.date
+    a["award_year"] = a["award_year"].astype("Int64")
+    a["number_employees"] = a["number_employees"].astype("Int64")
+
+    # a company's awards together, newest first
+    a["_key"] = key
+    a = a.sort_values(["_key", "contract_end_date", "award_year"],
+                      ascending=[True, False, False], na_position="last")
+    return a[OUT_COLUMNS].reset_index(drop=True), key
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Clean and roll up SBIR awards.")
     ap.add_argument("--csv", help="Path to award_data.csv")
@@ -146,19 +168,7 @@ def main() -> int:
     today = pd.Timestamp(date.today())
     print(f"\n=== NexusAI: clean SBIR awards ===  (as of {today.date()})\n")
     print(f"  reading {src}")
-    a = load_awards(src)
-    key = assign_company_key(a)
-    a["uei"] = key.where(~key.str.startswith("NAME:"), "")
-    a["award_active_today"] = a["contract_end_date"] >= today
-    a["contract_end_date"] = a["contract_end_date"].dt.date
-    a["award_year"] = a["award_year"].astype("Int64")
-    a["number_employees"] = a["number_employees"].astype("Int64")
-
-    # a company's awards together, newest first
-    a["_key"] = key
-    a = a.sort_values(["_key", "contract_end_date", "award_year"],
-                      ascending=[True, False, False], na_position="last")
-    out = a[OUT_COLUMNS]
+    out, key = clean(src, today)
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     try:
