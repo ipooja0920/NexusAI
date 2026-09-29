@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""Capital IQ companies + source data  ->  data/companies_combined.xlsx
+
+The step BETWEEN the raw export and enrichment. It attaches facts from
+outside sources to each Capital IQ company, and computes no scores at all -
+so the matching can be checked on its own, before anything is scored.
+
+  companies_raw.xlsx  --+
+                        +-->  companies_combined.xlsx  -->  enrich  -->  companies_enriched.xlsx
+  sbir_clean.csv      --+        (facts only)                           (facts + scores)
+
+companies_raw.xlsx is never modified. Every one of its columns is carried
+across unchanged, and the source columns are added on the right.
+
+Only SBIR so far. Form D, XBRL and OpenAlex join here later.
+
+SBIR matching - name first, website as fallback:
+
+  * NAME. The Capital IQ name and the SBIR name normalise to the same key.
+    If two different SBIR companies share that name (e.g. ADELPHI
+    TECHNOLOGY in Kentucky and in California), the website or state
+    decides; if neither does, nothing is attached and the row is marked
+    "ambiguous" with both candidates named, so it can be settled by eye.
+
+  * WEBSITE. When no name matches, the Capital IQ website domain is looked
+    up among SBIR websites. Only a domain belonging to exactly one SBIR
+    company counts. This is what catches rebrands, where the name changed
+    but the business did not.
+
+A name match is rejected only when the websites actively disagree, or the
+name is too generic to mean anything on its own - the shared rule in
+nexus/matching.py. A different STATE never rejects a match: companies move,
+and SBIR freezes the address as at each award.
+
+Columns added:
+
+  sbir_match_name      the SBIR company attached, as SBIR spells it
+  sbir_match_by        name | website | ambiguous
+  sbir_active_usd      sum of awards whose contract is still running
+  sbir_active_until    latest end date among active awards
+  sbir_total_usd       sum of every award
+  sbir_agencies        funding agencies with award counts, most first
+  university_current   research partners on ACTIVE awards
+  university_past      research partners on ENDED awards, minus current
+
+Input:  data/input/companies_raw.xlsx, data/cache/sbir_clean.csv
+Output: data/companies_combined.xlsx
+
+Usage:
+    python clean_sbir.py            # first, whenever award_data.csv changes
+    python combine_companies.py
+"""
+from __future__ import annotations
+
+import sys
+from collections import Counter, defaultdict
+from pathlib import Path
+
+import pandas as pd
+from openpyxl.utils import column_index_from_string
+
+from nexus.matching import (match_confidence, normalise_company_name,
+                            state_code, state_from_address, website_domain)
+from nexus.settings import Settings
+
+SBIR_COLUMNS = [
+    "sbir_match_name", "sbir_match_by",
+    "sbir_active_usd", "sbir_active_until", "sbir_total_usd",
+    "sbir_agencies", "university_current", "university_past",
+]
+
+# The per-award text is deliberately NOT read here. Titles and abstracts
+# stay in sbir_clean.csv until the matching step decides how to use them.
+SBIR_READ = ["company", "uei", "agency", "award_amount", "contract_end_date",
+             "award_active_today", "ri_name", "company_website", "state"]
+
+
+# ----------------------------------------------------------------------
+# Capital IQ side
+# ----------------------------------------------------------------------
+
+def read_raw(cfg) -> tuple:
+    """The Capital IQ export with EVERY column, unchanged, plus the names
+    of the columns we need to match on."""
+    ciq = cfg.capitaliq
+    df = pd.read_excel(cfg.companies_raw, header=int(ciq["header_row"]) - 1,
+                       dtype=str)
+    cols = list(df.columns)
+
+    def col(letter_key):
+        return cols[column_index_from_string(str(ciq[letter_key])) - 1]
+
+    name, site, addr = col("col_company"), col("col_website"), col("col_address")
+    # Drop the trailing blank and "Data provided by Capital IQ" rows.
+    df = df[df[name].notna() & (df[name].str.strip() != "")]
+    df = df[~df[name].str.startswith("Data provided by", na=False)]
+    return df.reset_index(drop=True), name, site, addr
+
+
+# ----------------------------------------------------------------------
+# SBIR side: one summary per SBIR company
+# ----------------------------------------------------------------------
+
+def _distinct(values) -> list:
+    seen, out = set(), []
+    for v in values:
+        if isinstance(v, str) and v.strip() and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
+def summarise_sbir(path: Path) -> dict:
+    """key -> summary. Key is the UEI, or the normalised name for older
+    companies that never had one."""
+    a = pd.read_csv(path, dtype=str, usecols=SBIR_READ, low_memory=False)
+    a["award_amount"] = pd.to_numeric(a["award_amount"], errors="coerce")
+    a["active"] = a["award_active_today"].str.lower() == "true"
+    a["contract_end_date"] = pd.to_datetime(a["contract_end_date"],
+                                            errors="coerce")
+    a["norm"] = a["company"].map(normalise_company_name)
+    a["key"] = a["uei"].where(a["uei"].fillna("") != "", "NAME:" + a["norm"])
+    # sbir_clean.csv is already newest-first within each company
+
+    out = {}
+    for key, g in a.groupby("key", sort=False):
+        act = g[g["active"]]
+        current = _distinct(act["ri_name"])
+        past = [x for x in _distinct(g.loc[~g["active"], "ri_name"])
+                if x not in current]
+        agencies = Counter(x for x in g["agency"] if isinstance(x, str) and x)
+        out[key] = {
+            "name": g["company"].iloc[0],
+            "norm": g["norm"].iloc[0],
+            "states": {s for s in g["state"].map(state_code) if s},
+            "domains": {d for d in g["company_website"].map(website_domain) if d},
+            "sbir_active_usd": round(act["award_amount"].sum(), 2) if len(act) else None,
+            # a plain ISO string, so Excel shows 2026-12-31, not a datetime
+            "sbir_active_until": act["contract_end_date"].max().strftime("%Y-%m-%d") if len(act) else None,
+            "sbir_total_usd": round(g["award_amount"].sum(), 2),
+            "sbir_agencies": "; ".join(f"{n} ({c})" for n, c in agencies.most_common()),
+            "university_current": "; ".join(current),
+            "university_past": "; ".join(past),
+        }
+    return out
+
+
+def build_indexes(sbir: dict) -> tuple:
+    by_name = defaultdict(list)
+    by_domain = defaultdict(set)
+    for key, s in sbir.items():
+        if s["norm"]:
+            by_name[s["norm"]].append(key)
+        for d in s["domains"]:
+            by_domain[d].add(key)
+    # a domain shared by several SBIR companies identifies none of them
+    by_domain = {d: next(iter(k)) for d, k in by_domain.items() if len(k) == 1}
+    return by_name, by_domain
+
+
+# ----------------------------------------------------------------------
+# The join
+# ----------------------------------------------------------------------
+
+def match_one(name, website, address, sbir, by_name, by_domain) -> tuple:
+    """(sbir_key or None, how, note)."""
+    key = normalise_company_name(name)
+    our_domain = website_domain(website)
+    our_state = state_from_address(address)
+
+    cands = by_name.get(key, []) if key else []
+    if len(cands) > 1:
+        # Same name, different companies. Let the website, then the state,
+        # decide - and only if it picks out exactly one.
+        by_site = [k for k in cands if our_domain and our_domain in sbir[k]["domains"]]
+        by_state = [k for k in cands if our_state and our_state in sbir[k]["states"]]
+        pick = by_site if len(by_site) == 1 else by_state if len(by_state) == 1 else []
+        if len(pick) != 1:
+            names = " / ".join(sorted({sbir[k]["name"] for k in cands}))
+            return None, "ambiguous", names
+        cands = pick
+
+    if len(cands) == 1:
+        s = sbir[cands[0]]
+        conf = match_confidence(key, our_state, s["states"], our_domain, s["domains"])
+        if conf == "suspect":
+            return None, "rejected", s["name"]
+        return cands[0], "name", None
+
+    if our_domain and our_domain in by_domain:
+        return by_domain[our_domain], "website", None
+    return None, None, None
+
+
+def main() -> int:
+    cfg = Settings()
+    sbir_path = cfg.cache_dir / "sbir_clean.csv"
+    out_path = cfg.path("companies_combined", "data/companies_combined.xlsx")
+
+    print("\n=== NexusAI: combine companies + sources ===\n")
+    if not sbir_path.exists():
+        print(f"  {sbir_path} not found - run 'python clean_sbir.py' first.")
+        return 1
+
+    raw, name_col, site_col, addr_col = read_raw(cfg)
+    print(f"  Capital IQ companies   {len(raw):>7,}")
+    sbir = summarise_sbir(sbir_path)
+    print(f"  SBIR companies         {len(sbir):>7,}")
+    by_name, by_domain = build_indexes(sbir)
+
+    added = {c: [] for c in SBIR_COLUMNS}
+    how_counts = Counter()
+    for _, row in raw.iterrows():
+        k, how, note = match_one(row[name_col], row[site_col], row[addr_col],
+                                 sbir, by_name, by_domain)
+        how_counts[how] += 1
+        if k is None:
+            for c in SBIR_COLUMNS:
+                added[c].append(None)
+            if how == "ambiguous":
+                added["sbir_match_by"][-1] = "ambiguous"
+                added["sbir_match_name"][-1] = note
+            continue
+        s = sbir[k]
+        added["sbir_match_name"].append(s["name"])
+        added["sbir_match_by"].append(how)
+        for c in SBIR_COLUMNS[2:]:
+            added[c].append(s[c] or None)
+
+    combined = pd.concat([raw, pd.DataFrame(added)], axis=1)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with pd.ExcelWriter(out_path, engine="openpyxl") as w:
+            combined.to_excel(w, index=False, sheet_name="Companies")
+            w.sheets["Companies"].freeze_panes = "B2"
+    except PermissionError as e:
+        raise PermissionError(f"Could not write {out_path.name} - is it open "
+                              "in Excel? Close it and re-run.") from e
+
+    matched = how_counts["name"] + how_counts["website"]
+    s = combined
+    print(f"\n  SBIR matched           {matched:>7,}")
+    print(f"    by name              {how_counts['name']:>7,}")
+    print(f"    by website           {how_counts['website']:>7,}")
+    print(f"  ambiguous (by eye)     {how_counts['ambiguous']:>7,}")
+    print(f"  rejected (websites disagree / too generic) {how_counts['rejected']:>4,}")
+    print(f"\n  with an active award   {s['sbir_active_usd'].notna().sum():>7,}")
+    print(f"  university current     {s['university_current'].notna().sum():>7,}")
+    print(f"  university past        {s['university_past'].notna().sum():>7,}")
+    print(f"\n  written: {out_path}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
