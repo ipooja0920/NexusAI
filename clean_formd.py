@@ -117,11 +117,23 @@ def chain(d: pd.DataFrame) -> pd.DataFrame:
 
     d["offering_id"] = acc.map(root)
     amt = dict(zip(acc, d["total_raised_to_date"]))
+    filed = dict(zip(acc, d["filing_date"]))
+    first_sale = dict(zip(acc, pd.to_datetime(d["SALE_DATE"], errors="coerce")))
 
     def new_money(a, p, amended):
         if isinstance(p, str):                  # previous filing is in our data
             now, before = amt.get(a), amt.get(p)
             if pd.isna(now) or pd.isna(before):
+                return None
+            # A previous total of $0 AFTER the first sale had already
+            # happened is impossible - money had come in, so the $0 was a
+            # reporting error. Subtracting from it would credit years of
+            # money to this one filing: ROM Technologies reported $0 in
+            # 2025 on a raise selling since 2014, then $448m in 2026, and
+            # all $448m read as 2026 money. 236 filings, $4.7bn, did this.
+            # The genuine case - $0 because nothing was sold YET - is kept.
+            fs, pf = first_sale.get(a), filed.get(p)
+            if before == 0 and pd.notna(fs) and pd.notna(pf) and fs < pf:
                 return None
             # A total can go DOWN (about 3% of amendments) when a company
             # corrects an earlier figure. That is no new money, not a refund.

@@ -93,6 +93,13 @@ components:
     rev_high_zero: 1000.0
     rev_missing_score: 0.5
 
+# --------- Combining sources onto Capital IQ ------------------------
+combine:
+  # Form D money counts as "recent" from this date up to the newest filing
+  # in the download. Startups raise enough for 18-24 months, so a round from
+  # early 2025 is very likely still in the bank.
+  formd_recent_from: 2025-01-01
+
 # --------- Funding score ---------------------------------------------
 # Replaces an LLM judgement with arithmetic over figures from filings.
 # Every threshold lives here so the shape can be retuned without code.

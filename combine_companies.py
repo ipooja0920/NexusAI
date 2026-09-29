@@ -12,7 +12,22 @@ so the matching can be checked on its own, before anything is scored.
 companies_raw.xlsx is never modified. Every one of its columns is carried
 across unchanged, and the source columns are added on the right.
 
-Only SBIR so far. Form D, XBRL and OpenAlex join here later.
+Sources so far: SBIR, then Form D. XBRL and OpenAlex join here later.
+
+FORM D columns (from data/cache/formd_clean.csv, built by clean_formd.py):
+
+  formd_match_name      the Form D company attached, as SEC spells it
+  formd_match_by        name | ambiguous
+  formd_raised          Yes if it has raised private money in the filings
+                        we hold (2023 onward); No if not
+  formd_recent_usd      money raised on or after combine.formd_recent_from
+                        in config.yaml (currently 2025-01-01)
+  formd_last_year       year of the latest filing that brought in new money
+  formd_industry_group  industry the company gave SEC, most recent first
+
+Form D matching is by NAME only - it has no website column - with the
+state used to choose between two companies of the same name and to confirm
+a name that is too short to trust on its own.
 
 SBIR matching - name first, website as fallback:
 
@@ -79,6 +94,16 @@ SBIR_COLUMNS = [
     "sbir_active_usd", "sbir_active_until",
     "sbir_agencies", "university_current", "university_past",
 ]
+
+FORMD_COLUMNS = [
+    "formd_match_name", "formd_match_by", "formd_raised",
+    "formd_recent_usd", "formd_last_year", "formd_industry_group",
+]
+
+FORMD_READ = ["company", "cik", "state", "filing_number", "filing_date",
+              "first_sale_date", "first_sale_yet_to_occur",
+              "total_raised_to_date", "raised_since_last_filing",
+              "industry_group", "is_business_combination"]
 
 # The per-award text is deliberately NOT read here. Titles and abstracts
 # stay in sbir_clean.csv until the matching step decides how to use them.
@@ -179,6 +204,83 @@ def build_indexes(sbir: dict) -> tuple:
 
 
 # ----------------------------------------------------------------------
+# Form D side: one summary per company (by CIK, SEC's company ID)
+# ----------------------------------------------------------------------
+
+def summarise_formd(path: Path, recent_from) -> dict:
+    """cik -> summary.
+
+    Money is only counted from filings that are real fundraising: merger
+    filings and "first sale yet to occur" filings are skipped.
+
+    RECENT money is money that came in on or after `recent_from`:
+      * an UPDATE (D/A) filed on or after that date -> its
+        raised_since_last_filing, the money raised since the previous filing
+      * a FIRST filing (D) whose FIRST SALE is on or after that date -> all
+        of it. Judged by first sale, not filing date, because some companies
+        file years late: Agilix filed in 2024 for a raise begun in 2016.
+
+    Form D money, unlike SBIR, is free cash - investors' money the company
+    can spend as it chooses, including on sponsored research.
+    """
+    f = pd.read_csv(path, dtype={"cik": str}, usecols=FORMD_READ,
+                    low_memory=False)
+    f["filing_date"] = pd.to_datetime(f["filing_date"], errors="coerce")
+    f["first_sale_date"] = pd.to_datetime(f["first_sale_date"], errors="coerce")
+    for col in ("first_sale_yet_to_occur", "is_business_combination"):
+        f[col] = f[col].astype(str).str.lower() == "true"
+    f["norm"] = f["company"].map(normalise_company_name)
+    start = pd.Timestamp(recent_from)
+
+    real = ~f["is_business_combination"] & ~f["first_sale_yet_to_occur"]
+    is_update = f["filing_number"] > 1
+    in_window = (is_update & (f["filing_date"] >= start)) | \
+                (~is_update & (f["first_sale_date"] >= start))
+    f["recent"] = f["raised_since_last_filing"].where(real & in_window)
+    f["new_money"] = real & (f["raised_since_last_filing"] > 0)
+    f = f.sort_values("filing_date", ascending=False)
+
+    out = {}
+    for cik, g in f.groupby("cik", sort=False):
+        money = g[g["new_money"]]
+        recent = g["recent"].where(g["recent"] > 0).sum()
+        industries = list(dict.fromkeys(
+            x for x in g["industry_group"] if isinstance(x, str) and x))
+        out[cik] = {
+            "name": g["company"].iloc[0],
+            "norm": g["norm"].iloc[0],
+            "states": {s for s in g["state"].map(state_code) if s},
+            # ever raised real money in the filings we hold (2023 onward)
+            "formd_raised": "Yes" if (real[g.index] &
+                                      (g["total_raised_to_date"] > 0)).any() else "No",
+            "formd_recent_usd": round(recent, 2) if recent > 0 else None,
+            "formd_last_year": int(money["filing_date"].iloc[0].year)
+                               if len(money) else None,
+            "formd_industry_group": "; ".join(industries) or None,
+        }
+    return out
+
+
+def match_formd(name, address, formd, by_name) -> tuple:
+    """(cik or None, how, note). Name only - Form D has no website - with
+    the state used to pick between namesakes and to confirm a short name."""
+    key = normalise_company_name(name)
+    our_state = state_from_address(address)
+    cands = by_name.get(key, []) if key else []
+    if len(cands) > 1:
+        by_state = [k for k in cands if our_state and our_state in formd[k]["states"]]
+        if len(by_state) != 1:
+            return None, "ambiguous", " / ".join(sorted({formd[k]["name"] for k in cands}))
+        cands = by_state
+    if len(cands) == 1:
+        f = formd[cands[0]]
+        if match_confidence(key, our_state, f["states"]) == "suspect":
+            return None, "rejected", f["name"]
+        return cands[0], "name", None
+    return None, None, None
+
+
+# ----------------------------------------------------------------------
 # The join
 # ----------------------------------------------------------------------
 
@@ -270,7 +372,41 @@ def main() -> int:
         for c in SBIR_COLUMNS[3:]:
             added[c].append(s[c] or None)
 
-    combined = pd.concat([raw, pd.DataFrame(added)], axis=1)
+    # ---- Form D ----
+    formd_path = cfg.cache_dir / "formd_clean.csv"
+    fd_added = {c: [] for c in FORMD_COLUMNS}
+    fd_counts = Counter()
+    if formd_path.exists():
+        recent_from = (cfg.raw.get("combine") or {}).get("formd_recent_from",
+                                                          "2025-01-01")
+        formd = summarise_formd(formd_path, recent_from)
+        print(f"  Form D companies       {len(formd):>7,}   (recent money from {recent_from})")
+        fd_by_name = defaultdict(list)
+        for k, v in formd.items():
+            if v["norm"]:
+                fd_by_name[v["norm"]].append(k)
+        for _, row in raw.iterrows():
+            k, how, note = match_formd(row[name_col], row[addr_col], formd, fd_by_name)
+            fd_counts[how] += 1
+            if k is None:
+                for c in FORMD_COLUMNS:
+                    fd_added[c].append(None)
+                if how == "ambiguous":
+                    fd_added["formd_match_by"][-1] = "ambiguous"
+                    fd_added["formd_match_name"][-1] = note
+                else:
+                    fd_added["formd_raised"][-1] = "No"
+                continue
+            f = formd[k]
+            fd_added["formd_match_name"].append(f["name"])
+            fd_added["formd_match_by"].append(how)
+            for c in FORMD_COLUMNS[2:]:
+                fd_added[c].append(f[c])
+    else:
+        print(f"  {formd_path.name} not found - run 'python clean_formd.py'; Form D columns left blank")
+        fd_added = {c: [None] * len(raw) for c in FORMD_COLUMNS}
+
+    combined = pd.concat([raw, pd.DataFrame(added), pd.DataFrame(fd_added)], axis=1)
 
     # Employees: Capital IQ first. Only where Capital IQ has NO figure is
     # the SBIR headcount used, and employees_source says which it was, so
@@ -318,6 +454,11 @@ def main() -> int:
     print(f"\n  employees from Capital IQ  {(src == 'Capital IQ').sum():>7,}")
     print(f"  employees filled from SBIR {src.str.startswith('SBIR').sum():>7,}")
     print(f"  employees still blank      {(src == '').sum():>7,}")
+    print(f"\n  Form D matched         {fd_counts['name']:>7,}")
+    print(f"  ambiguous (by eye)     {fd_counts['ambiguous']:>7,}")
+    print(f"  rejected (too generic) {fd_counts['rejected']:>7,}")
+    print(f"  formd_raised = Yes     {(combined['formd_raised'] == 'Yes').sum():>7,}")
+    print(f"  with recent money      {combined['formd_recent_usd'].notna().sum():>7,}")
     print(f"\n  written: {out_path}\n")
     return 0
 

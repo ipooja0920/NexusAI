@@ -35,6 +35,25 @@ Built by `combine_companies.py` from `data/input/companies_raw.xlsx` and
 | university_current | text | Research partners on awards still running | Distinct `ri_name` on active awards, `; `-separated | `Stevens Institute of Technology` | 9 |
 | university_past | text | Research partners on awards that have ended | Distinct `ri_name` on ended awards, **excluding** anything in `university_current` | `Boston University; MIT` | 245 |
 
+### New fields — Form D
+
+Added after the SBIR block. From `data/cache/formd_clean.csv`.
+
+| Field | Type | Meaning | How it's derived | Example | Filled |
+|---|---|---|---|---|---|
+| formd_match_name | text | The Form D company attached, as SEC spells it (latest name) | Copied from Form D. For an ambiguous match, lists the candidates | `REVBIO, INC.` | 1,067 |
+| formd_match_by | text | How the match was made | `name` — normalised names equal; `ambiguous` — one name, several Form D companies, state couldn't pick one | `name` | 1,067 |
+| formd_raised | Yes / No | Has raised private money in the filings we hold (2023 onward) | `Yes` if any real filing (not a merger, not "yet to occur") reports money raised | `Yes` | 1,013 Yes |
+| formd_recent_usd | number (USD) | Money raised since `combine.formd_recent_from` in `config.yaml` (now 2025-01-01) | Sum of `raised_since_last_filing` over: updates filed on/after the date, and first filings whose **first sale** is on/after it. Mergers and "yet to occur" never count. **Free cash** — unlike SBIR, investors' money can be spent on sponsored research | `3115000` | 451 |
+| formd_last_year | year | Last year the company raised new money | Year of the latest filing with `raised_since_last_filing` > 0 | `2025` | |
+| formd_industry_group | text | Industry the company gave SEC | Every value across its filings, most recent first | `Biotechnology` | |
+
+Form D has no website, so matching is **name only**, with the state used to
+choose between two companies of the same name and to confirm a short name.
+Filings are grouped by **CIK** (SEC's company ID), so a company that renamed
+itself keeps all its raises — Liberation Labs Holdings → Liberation
+Bioindustries.
+
 ### Matching rules
 
 - **Name first, website second.** Names are compared after normalising
@@ -80,6 +99,39 @@ contact and PI names, emails and phone numbers are never read.
 
 ---
 
+## 3. `data/cache/formd_clean.csv`
+
+One row per Form D **filing** by an operating company. Built by
+`clean_formd.py` from `data/sources/formd/` (quarterly downloads). No
+matching, no rolling up. Pooled investment funds and co-issuers removed;
+the RELATEDPERSONS and SIGNATURES tables (people's names) are never read.
+
+**How Form D works:** a company files a **D** within 15 days of the first
+sale in a fundraise, then **D/A** updates while it stays open. Each filing
+reports the **total raised so far**, not new money.
+
+| Field | Meaning |
+|---|---|
+| company, cik, city, state, zip | Who filed. CIK is SEC's company ID and survives renames |
+| offering_id | The fundraise this filing belongs to (ID of its first filing we hold) |
+| filing_number | 1 = first filing of the fundraise, 2, 3… = updates |
+| is_latest_filing | No later update exists |
+| filing_date | When this filing reached the SEC |
+| first_sale_date | When money first came into this fundraise — same on every filing of it |
+| first_sale_yet_to_occur | Announced, nothing sold yet |
+| offering_target | What the company is trying to raise. Can rise over time. `Indefinite` = no ceiling |
+| total_raised_to_date | Total raised in this fundraise so far, as reported |
+| raised_since_last_filing | New money since the previous filing = this total − previous total. First filing: all of it. **Blank** when it can't be known: the previous filing predates 2023, or the previous filing reported an impossible $0 after sales had begun. **0** when a total was corrected downward |
+| security_type | equity / debt / SAFE / option-warrant / other |
+| number_of_investors | People who have invested so far |
+| industry_group | Industry the company chose, e.g. Biotechnology |
+| revenue_range | Self-reported; ~90% "Decline to Disclose" |
+| company_founded_year | Given only if under 5 years old — blank usually means older |
+| is_business_combination | Filing relates to a merger or acquisition, not a normal raise |
+| accession_number | This filing's own SEC ID |
+
+---
+
 ## Things to remember
 
 - **"Active" depends on the day the file is built.** Re-run
@@ -89,3 +141,8 @@ contact and PI names, emails and phone numbers are never read.
   how old.
 - **Award titles and abstracts** are only in `sbir_clean.csv` for now; how
   they feed matching is still to be decided.
+- **SBIR money is not free cash.** It is tied to the funded project, so no
+  SBIR dollar figure says whether a company can sponsor research now — which
+  is why `sbir_total_usd` was dropped. Form D money *is* free cash.
+- **Rebuild order after new downloads:** `python clean_sbir.py`,
+  `python clean_formd.py`, then `python combine_companies.py`.
