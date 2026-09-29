@@ -53,8 +53,8 @@ OUT_COLUMNS = [
     "company", "cik", "city", "state", "zip",
     "offering_id", "filing_number", "is_latest_filing",
     "filing_date", "first_sale_date", "first_sale_yet_to_occur",
-    "amount_sold_to_date", "raised_since_last_filing",
-    "offering_target", "security_type", "number_of_investors",
+    "offering_target", "total_raised_to_date", "raised_since_last_filing",
+    "security_type", "number_of_investors",
     "industry_group", "revenue_range", "year_incorporated",
     "is_business_combination", "accession_number",
 ]
@@ -116,7 +116,7 @@ def chain(d: pd.DataFrame) -> pd.DataFrame:
         return a
 
     d["offering_id"] = acc.map(root)
-    amt = dict(zip(acc, d["amount_sold_to_date"]))
+    amt = dict(zip(acc, d["total_raised_to_date"]))
 
     def new_money(a, p, amended):
         if isinstance(p, str):                  # previous filing is in our data
@@ -146,7 +146,7 @@ def clean(formd_dir: Path) -> pd.DataFrame:
     d = load_filings(formd_dir)
     d["filing_date"] = pd.to_datetime(d["FILING_DATE"], format="%d-%b-%Y",
                                       errors="coerce")
-    d["amount_sold_to_date"] = pd.to_numeric(d["TOTALAMOUNTSOLD"], errors="coerce")
+    d["total_raised_to_date"] = pd.to_numeric(d["TOTALAMOUNTSOLD"], errors="coerce")
     d = chain(d)
 
     out = pd.DataFrame({
@@ -161,7 +161,7 @@ def clean(formd_dir: Path) -> pd.DataFrame:
         "filing_date": d["filing_date"].dt.date,
         "first_sale_date": pd.to_datetime(d["SALE_DATE"], errors="coerce").dt.date,
         "first_sale_yet_to_occur": _true(d["YETTOOCCUR"]),
-        "amount_sold_to_date": d["amount_sold_to_date"],
+        "total_raised_to_date": d["total_raised_to_date"],
         "raised_since_last_filing": d["raised_since_last_filing"],
         # "Indefinite" = no ceiling set; kept as the word, not blanked
         "offering_target": _t(d["TOTALOFFERINGAMOUNT"]),
