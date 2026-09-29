@@ -29,7 +29,7 @@ Built by `combine_companies.py` from `data/input/companies_raw.xlsx` and
 | sbir_match_name | text | The SBIR company attached to this row, as SBIR spells it | Copied from SBIR. For an ambiguous match, lists the candidates | `AGILIX INC` | 1,066 |
 | sbir_match_by | text | How the match was made | `name` — normalised names are equal; `website` — no name match but the website domain belongs to exactly one SBIR company; `name+suffix` — names match and websites differ, but the legal suffix (Inc / LLC / Ltd…) agrees; `ambiguous` — one name, several SBIR companies, nothing attached | `name` | 1,066 |
 | sbir_awarded | Yes / No | Has the company ever had an SBIR or STTR award | `Yes` if matched; `No` if not; blank for the ambiguous row | `Yes` | 21,805 (1,065 Yes) |
-| sbir_active_usd | number (USD) | Money on awards still running | Sum of `award_amount` over awards with `award_active_today = True`. Full award value — not what is left unspent | `551373` | 76 |
+| sbir_active_usdmm | number ($ millions) | Money on awards still running | Sum of `award_amount` over awards with `award_active_today = True`, in $ millions to 3 decimals (like Capital IQ revenue). Full award value — not what is left unspent, and **not free cash** | `0.551` | 76 |
 | sbir_active_until | date | When the company's SBIR money runs out | Latest `contract_end_date` among active awards | `2027-07-31` | 76 |
 | sbir_agencies | text | Which agencies funded it, and how often | Every award, active or ended, counted per agency, most first | `Department of Energy (4); National Science Foundation (1)` | 1,062 |
 | university_current | text | Research partners on awards still running | Distinct `ri_name` on active awards, `; `-separated | `Stevens Institute of Technology` | 9 |
@@ -44,7 +44,7 @@ Added after the SBIR block. From `data/cache/formd_clean.csv`.
 | formd_match_name | text | The Form D company attached, as SEC spells it (latest name) | Copied from Form D. For an ambiguous match, lists the candidates | `REVBIO, INC.` | 1,067 |
 | formd_match_by | text | How the match was made | `name` — normalised names equal; `ambiguous` — one name, several Form D companies, state couldn't pick one | `name` | 1,067 |
 | formd_raised | Yes / No | Has raised private money in the filings we hold (2023 onward) | `Yes` if any real filing (not a merger, not "yet to occur") reports money raised | `Yes` | 1,013 Yes |
-| formd_recent_usd | number (USD) | Money raised since `combine.formd_recent_from` in `config.yaml` (now 2025-01-01) | Sum of `raised_since_last_filing` over: updates filed on/after the date, and first filings whose **first sale** is on/after it. Mergers and "yet to occur" never count. **Free cash** — unlike SBIR, investors' money can be spent on sponsored research | `3115000` | 451 |
+| formd_recent_usdmm | number ($ millions) | Money raised since `combine.formd_recent_from` in `config.yaml` (now 2025-01-01) | Sum of `raised_since_last_filing` over: updates filed on/after the date, and first filings whose **first sale** is on/after it. Mergers and "yet to occur" never count. **Free cash** — unlike SBIR, investors' money can be spent on sponsored research | `3.115` | 451 |
 | formd_last_year | year | Last year the company raised new money | Year of the latest filing with `raised_since_last_filing` > 0 | `2025` | |
 | formd_industry_group | text | Industry the company gave SEC | Every value across its filings, most recent first | `Biotechnology` | |
 

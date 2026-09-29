@@ -20,7 +20,8 @@ FORM D columns (from data/cache/formd_clean.csv, built by clean_formd.py):
   formd_match_by        name | ambiguous
   formd_raised          Yes if it has raised private money in the filings
                         we hold (2023 onward); No if not
-  formd_recent_usd      money raised on or after combine.formd_recent_from
+  formd_recent_usdmm    money raised on or after combine.formd_recent_from,
+                        $ millions
                         in config.yaml (currently 2025-01-01)
   formd_last_year       year of the latest filing that brought in new money
   formd_industry_group  industry the company gave SEC, most recent first
@@ -56,7 +57,7 @@ Columns added:
                        parent's website)
   sbir_awarded         Yes if the company has ever had an SBIR/STTR award,
                        No if not, blank if the match was ambiguous
-  sbir_active_usd      sum of awards whose contract is still running
+  sbir_active_usdmm    sum of awards whose contract is still running, $ millions
   sbir_active_until    latest end date among active awards
   sbir_agencies        funding agencies with award counts, most first
   university_current   research partners on ACTIVE awards
@@ -91,13 +92,13 @@ from nexus.settings import Settings
 
 SBIR_COLUMNS = [
     "sbir_match_name", "sbir_match_by", "sbir_awarded",
-    "sbir_active_usd", "sbir_active_until",
+    "sbir_active_usdmm", "sbir_active_until",
     "sbir_agencies", "university_current", "university_past",
 ]
 
 FORMD_COLUMNS = [
     "formd_match_name", "formd_match_by", "formd_raised",
-    "formd_recent_usd", "formd_last_year", "formd_industry_group",
+    "formd_recent_usdmm", "formd_last_year", "formd_industry_group",
 ]
 
 FORMD_READ = ["company", "cik", "state", "filing_number", "filing_date",
@@ -177,7 +178,8 @@ def summarise_sbir(path: Path) -> dict:
             "norm": g["norm"].iloc[0],
             "states": {s for s in g["state"].map(state_code) if s},
             "domains": {d for d in g["company_website"].map(website_domain) if d},
-            "sbir_active_usd": round(act["award_amount"].sum(), 2) if len(act) else None,
+            # $ millions to 3 decimals (nearest $1,000), like Capital IQ revenue ($USDmm)
+            "sbir_active_usdmm": round(act["award_amount"].sum() / 1e6, 3) if len(act) else None,
             # a plain ISO string, so Excel shows 2026-12-31, not a datetime
             "sbir_active_until": act["contract_end_date"].max().strftime("%Y-%m-%d") if len(act) else None,
             "sbir_agencies": "; ".join(f"{n} ({c})" for n, c in agencies.most_common()),
@@ -253,7 +255,8 @@ def summarise_formd(path: Path, recent_from) -> dict:
             # ever raised real money in the filings we hold (2023 onward)
             "formd_raised": "Yes" if (real[g.index] &
                                       (g["total_raised_to_date"] > 0)).any() else "No",
-            "formd_recent_usd": round(recent, 2) if recent > 0 else None,
+            # $ millions to 3 decimals (nearest $1,000), like Capital IQ revenue ($USDmm)
+            "formd_recent_usdmm": round(recent / 1e6, 3) if recent > 0 else None,
             "formd_last_year": int(money["filing_date"].iloc[0].year)
                                if len(money) else None,
             "formd_industry_group": "; ".join(industries) or None,
@@ -447,7 +450,7 @@ def main() -> int:
     print(f"  ambiguous (by eye)     {how_counts['ambiguous']:>7,}")
     print(f"  rejected (websites disagree / too generic) {how_counts['rejected']:>4,}")
     print(f"\n  sbir_awarded = Yes     {(s['sbir_awarded'] == 'Yes').sum():>7,}")
-    print(f"  with an active award   {s['sbir_active_usd'].notna().sum():>7,}")
+    print(f"  with an active award   {s['sbir_active_usdmm'].notna().sum():>7,}")
     print(f"  university current     {s['university_current'].notna().sum():>7,}")
     print(f"  university past        {s['university_past'].notna().sum():>7,}")
     src = combined["employees_source"].fillna("")
@@ -458,7 +461,7 @@ def main() -> int:
     print(f"  ambiguous (by eye)     {fd_counts['ambiguous']:>7,}")
     print(f"  rejected (too generic) {fd_counts['rejected']:>7,}")
     print(f"  formd_raised = Yes     {(combined['formd_raised'] == 'Yes').sum():>7,}")
-    print(f"  with recent money      {combined['formd_recent_usd'].notna().sum():>7,}")
+    print(f"  with recent money      {combined['formd_recent_usdmm'].notna().sum():>7,}")
     print(f"\n  written: {out_path}\n")
     return 0
 
