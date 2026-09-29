@@ -55,7 +55,7 @@ OUT_COLUMNS = [
     "filing_date", "first_sale_date", "first_sale_yet_to_occur",
     "offering_target", "total_raised_to_date", "raised_since_last_filing",
     "security_type", "number_of_investors",
-    "industry_group", "revenue_range", "year_incorporated",
+    "industry_group", "revenue_range", "company_founded_year",
     "is_business_combination", "accession_number",
 ]
 
@@ -170,7 +170,7 @@ def clean(formd_dir: Path) -> pd.DataFrame:
                                              errors="coerce").astype("Int64"),
         "industry_group": _t(d["INDUSTRYGROUPTYPE"]),
         "revenue_range": _t(d["REVENUERANGE"]),
-        "year_incorporated": pd.to_numeric(d["YEAROFINC_VALUE_ENTERED"],
+        "company_founded_year": pd.to_numeric(d["YEAROFINC_VALUE_ENTERED"],
                                            errors="coerce").astype("Int64"),
         "is_business_combination": _true(d["ISBUSINESSCOMBINATIONTRANS"]),
         "accession_number": d["ACCESSIONNUMBER"],
