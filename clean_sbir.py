@@ -48,7 +48,7 @@ from nexus.matching import normalise_company_name
 # phones - are not read at all. The personal data in particular has no use
 # here and should not travel any further than the raw download.
 RAW_COLUMNS = [
-    "Company", "UEI", "Award Title", "Abstract", "Award Amount",
+    "Company", "UEI", "Agency", "Award Title", "Abstract", "Award Amount",
     "Award Year", "Contract End Date", "Number Employees",
     "Company Website", "Address1", "Address2", "City", "State", "Zip",
     "RI Name",
@@ -60,7 +60,7 @@ NO_INSTITUTION = {"", "stub", "n/a", "na", "none", "nan", "-"}
 
 
 OUT_COLUMNS = [
-    "company", "uei", "award_title", "abstract", "award_amount",
+    "company", "uei", "agency", "award_title", "abstract", "award_amount",
     "award_year", "contract_end_date", "award_active_today", "ri_name",
     "number_employees", "company_website", "address", "city", "state", "zip",
 ]
@@ -80,6 +80,11 @@ def load_awards(path: Path) -> pd.DataFrame:
     a = pd.DataFrame({
         "company": _text(raw["Company"]),
         "uei": _text(raw["UEI"]).str.upper(),
+        # The funding agency is the cleanest label for what AREA an award is
+        # in - Energy, Health and Human Services, Defense - which matters
+        # when one company works in several and is later folded into a
+        # single Capital IQ row.
+        "agency": _text(raw["Agency"]),
         "award_title": _text(raw["Award Title"]),
         "abstract": _text(raw["Abstract"]),
         "award_amount": pd.to_numeric(raw["Award Amount"], errors="coerce"),
