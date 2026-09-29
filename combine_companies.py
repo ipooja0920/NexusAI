@@ -36,9 +36,10 @@ Columns added:
 
   sbir_match_name      the SBIR company attached, as SBIR spells it
   sbir_match_by        name | website | ambiguous
+  sbir_awarded         Yes if the company has ever had an SBIR/STTR award,
+                       No if not, blank if the match was ambiguous
   sbir_active_usd      sum of awards whose contract is still running
   sbir_active_until    latest end date among active awards
-  sbir_total_usd       sum of every award
   sbir_agencies        funding agencies with award counts, most first
   university_current   research partners on ACTIVE awards
   university_past      research partners on ENDED awards, minus current
@@ -64,8 +65,8 @@ from nexus.matching import (match_confidence, normalise_company_name,
 from nexus.settings import Settings
 
 SBIR_COLUMNS = [
-    "sbir_match_name", "sbir_match_by",
-    "sbir_active_usd", "sbir_active_until", "sbir_total_usd",
+    "sbir_match_name", "sbir_match_by", "sbir_awarded",
+    "sbir_active_usd", "sbir_active_until",
     "sbir_agencies", "university_current", "university_past",
 ]
 
@@ -137,7 +138,6 @@ def summarise_sbir(path: Path) -> dict:
             "sbir_active_usd": round(act["award_amount"].sum(), 2) if len(act) else None,
             # a plain ISO string, so Excel shows 2026-12-31, not a datetime
             "sbir_active_until": act["contract_end_date"].max().strftime("%Y-%m-%d") if len(act) else None,
-            "sbir_total_usd": round(g["award_amount"].sum(), 2),
             "sbir_agencies": "; ".join(f"{n} ({c})" for n, c in agencies.most_common()),
             "university_current": "; ".join(current),
             "university_past": "; ".join(past),
@@ -220,11 +220,18 @@ def main() -> int:
             if how == "ambiguous":
                 added["sbir_match_by"][-1] = "ambiguous"
                 added["sbir_match_name"][-1] = note
+                # it may well have awards - we just cannot say whose
+            else:
+                added["sbir_awarded"][-1] = "No"
             continue
         s = sbir[k]
         added["sbir_match_name"].append(s["name"])
         added["sbir_match_by"].append(how)
-        for c in SBIR_COLUMNS[2:]:
+        # A federal R&D award is independent evidence that a small company
+        # does real research - often the only such evidence for companies
+        # Capital IQ has no revenue for.
+        added["sbir_awarded"].append("Yes")
+        for c in SBIR_COLUMNS[3:]:
             added[c].append(s[c] or None)
 
     combined = pd.concat([raw, pd.DataFrame(added)], axis=1)
@@ -244,7 +251,8 @@ def main() -> int:
     print(f"    by website           {how_counts['website']:>7,}")
     print(f"  ambiguous (by eye)     {how_counts['ambiguous']:>7,}")
     print(f"  rejected (websites disagree / too generic) {how_counts['rejected']:>4,}")
-    print(f"\n  with an active award   {s['sbir_active_usd'].notna().sum():>7,}")
+    print(f"\n  sbir_awarded = Yes     {(s['sbir_awarded'] == 'Yes').sum():>7,}")
+    print(f"  with an active award   {s['sbir_active_usd'].notna().sum():>7,}")
     print(f"  university current     {s['university_current'].notna().sum():>7,}")
     print(f"  university past        {s['university_past'].notna().sum():>7,}")
     print(f"\n  written: {out_path}\n")
