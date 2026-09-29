@@ -43,6 +43,12 @@ Columns added:
   sbir_agencies        funding agencies with award counts, most first
   university_current   research partners on ACTIVE awards
   university_past      research partners on ENDED awards, minus current
+  employees_source     beside the employees column: "Capital IQ", or
+                       "SBIR (year)" where Capital IQ had no figure and the
+                       SBIR headcount from that year's award was used
+
+The one change to a Capital IQ column: a BLANK employee count is filled
+from SBIR. A figure Capital IQ already has is never touched.
 
 Input:  data/input/companies_raw.xlsx, data/cache/sbir_clean.csv
 Output: data/companies_combined.xlsx
@@ -73,7 +79,8 @@ SBIR_COLUMNS = [
 # The per-award text is deliberately NOT read here. Titles and abstracts
 # stay in sbir_clean.csv until the matching step decides how to use them.
 SBIR_READ = ["company", "uei", "agency", "award_amount", "contract_end_date",
-             "award_active_today", "ri_name", "company_website", "state"]
+             "award_active_today", "ri_name", "company_website", "state",
+             "number_employees", "award_year"]
 
 
 # ----------------------------------------------------------------------
@@ -92,10 +99,11 @@ def read_raw(cfg) -> tuple:
         return cols[column_index_from_string(str(ciq[letter_key])) - 1]
 
     name, site, addr = col("col_company"), col("col_website"), col("col_address")
+    emp = col("col_employees")
     # Drop the trailing blank and "Data provided by Capital IQ" rows.
     df = df[df[name].notna() & (df[name].str.strip() != "")]
     df = df[~df[name].str.startswith("Data provided by", na=False)]
-    return df.reset_index(drop=True), name, site, addr
+    return df.reset_index(drop=True), name, site, addr, emp
 
 
 # ----------------------------------------------------------------------
@@ -119,6 +127,8 @@ def summarise_sbir(path: Path) -> dict:
     a["active"] = a["award_active_today"].str.lower() == "true"
     a["contract_end_date"] = pd.to_datetime(a["contract_end_date"],
                                             errors="coerce")
+    a["number_employees"] = pd.to_numeric(a["number_employees"], errors="coerce")
+    a["award_year"] = pd.to_numeric(a["award_year"], errors="coerce")
     a["norm"] = a["company"].map(normalise_company_name)
     a["key"] = a["uei"].where(a["uei"].fillna("") != "", "NAME:" + a["norm"])
     # sbir_clean.csv is already newest-first within each company
@@ -130,6 +140,9 @@ def summarise_sbir(path: Path) -> dict:
         past = [x for x in _distinct(g.loc[~g["active"], "ri_name"])
                 if x not in current]
         agencies = Counter(x for x in g["agency"] if isinstance(x, str) and x)
+        # headcount from the MOST RECENT award that reports one (rows are
+        # newest first); zero is a blank, not a company with no staff
+        emp = g[g["number_employees"] > 0]
         out[key] = {
             "name": g["company"].iloc[0],
             "norm": g["norm"].iloc[0],
@@ -141,6 +154,9 @@ def summarise_sbir(path: Path) -> dict:
             "sbir_agencies": "; ".join(f"{n} ({c})" for n, c in agencies.most_common()),
             "university_current": "; ".join(current),
             "university_past": "; ".join(past),
+            "employees": int(emp["number_employees"].iloc[0]) if len(emp) else None,
+            "employees_year": int(emp["award_year"].iloc[0])
+                              if len(emp) and pd.notna(emp["award_year"].iloc[0]) else None,
         }
     return out
 
@@ -202,7 +218,7 @@ def main() -> int:
         print(f"  {sbir_path} not found - run 'python clean_sbir.py' first.")
         return 1
 
-    raw, name_col, site_col, addr_col = read_raw(cfg)
+    raw, name_col, site_col, addr_col, emp_col = read_raw(cfg)
     print(f"  Capital IQ companies   {len(raw):>7,}")
     sbir = summarise_sbir(sbir_path)
     print(f"  SBIR companies         {len(sbir):>7,}")
@@ -210,10 +226,12 @@ def main() -> int:
 
     added = {c: [] for c in SBIR_COLUMNS}
     how_counts = Counter()
+    matched_keys = []
     for _, row in raw.iterrows():
         k, how, note = match_one(row[name_col], row[site_col], row[addr_col],
                                  sbir, by_name, by_domain)
         how_counts[how] += 1
+        matched_keys.append(k)
         if k is None:
             for c in SBIR_COLUMNS:
                 added[c].append(None)
@@ -235,6 +253,28 @@ def main() -> int:
             added[c].append(s[c] or None)
 
     combined = pd.concat([raw, pd.DataFrame(added)], axis=1)
+
+    # Employees: Capital IQ first. Only where Capital IQ has NO figure is
+    # the SBIR headcount used, and employees_source says which it was, so
+    # a filled-in number is never mistaken for Capital IQ's own.
+    def _blank(v):
+        return v is None or (isinstance(v, float) and v != v) or \
+            str(v).strip() in ("", "-", "nan", "0")
+    ciq_has = ~combined[emp_col].map(_blank)
+    sbir_emp = [sbir[k]["employees"] if k else None for k in matched_keys]
+    sbir_year = [sbir[k]["employees_year"] if k else None for k in matched_keys]
+    source = []
+    for i in range(len(combined)):
+        if ciq_has.iat[i]:
+            source.append("Capital IQ")
+        elif sbir_emp[i]:
+            combined.at[i, emp_col] = str(sbir_emp[i])
+            source.append(f"SBIR ({sbir_year[i]})" if sbir_year[i] else "SBIR")
+        else:
+            source.append(None)
+    # right beside the employees column, so the two are read together
+    combined.insert(combined.columns.get_loc(emp_col) + 1,
+                    "employees_source", source)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with pd.ExcelWriter(out_path, engine="openpyxl") as w:
@@ -255,6 +295,10 @@ def main() -> int:
     print(f"  with an active award   {s['sbir_active_usd'].notna().sum():>7,}")
     print(f"  university current     {s['university_current'].notna().sum():>7,}")
     print(f"  university past        {s['university_past'].notna().sum():>7,}")
+    src = combined["employees_source"].fillna("")
+    print(f"\n  employees from Capital IQ  {(src == 'Capital IQ').sum():>7,}")
+    print(f"  employees filled from SBIR {src.str.startswith('SBIR').sum():>7,}")
+    print(f"  employees still blank      {(src == '').sum():>7,}")
     print(f"\n  written: {out_path}\n")
     return 0
 
