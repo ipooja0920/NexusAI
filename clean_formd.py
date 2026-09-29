@@ -14,7 +14,7 @@ How Form D works, because every column below follows from it:
     a running total three times:
         2023  $187,000   ->  2024  $6,908,457   ->  2025  $10,023,457
   * So the NEW money a filing adds is its total minus the previous
-    filing's total. That is new_amount_this_filing, and it is the column
+    filing's total. That is raised_since_last_filing, and it is the column
     that says when money actually came in.
 
 Removed entirely:
@@ -53,7 +53,7 @@ OUT_COLUMNS = [
     "company", "cik", "city", "state", "zip",
     "offering_id", "filing_number", "is_latest_filing",
     "filing_date", "first_sale_date", "first_sale_yet_to_occur",
-    "amount_sold_to_date", "new_amount_this_filing",
+    "amount_sold_to_date", "raised_since_last_filing",
     "offering_target", "security_type", "number_of_investors",
     "industry_group", "revenue_range", "year_incorporated",
     "is_business_combination", "accession_number",
@@ -131,7 +131,7 @@ def chain(d: pd.DataFrame) -> pd.DataFrame:
             # includes earlier money we cannot separate out.
             return None
         return amt.get(a)                       # an original filing: all new
-    d["new_amount_this_filing"] = [
+    d["raised_since_last_filing"] = [
         new_money(a, p, am) for a, p, am in
         zip(acc, prev, d["PREVIOUSACCESSIONNUMBER"].notna())]
 
@@ -162,7 +162,7 @@ def clean(formd_dir: Path) -> pd.DataFrame:
         "first_sale_date": pd.to_datetime(d["SALE_DATE"], errors="coerce").dt.date,
         "first_sale_yet_to_occur": _true(d["YETTOOCCUR"]),
         "amount_sold_to_date": d["amount_sold_to_date"],
-        "new_amount_this_filing": d["new_amount_this_filing"],
+        "raised_since_last_filing": d["raised_since_last_filing"],
         # "Indefinite" = no ceiling set; kept as the word, not blanked
         "offering_target": _t(d["TOTALOFFERINGAMOUNT"]),
         "security_type": d.apply(security_type, axis=1),
@@ -197,8 +197,8 @@ def main() -> int:
     n_off = out["offering_id"].nunique()
     print(f"  filings (operating companies)   {len(out):>8,}")
     print(f"    in {n_off:,} offerings")
-    print(f"    new money known               {out['new_amount_this_filing'].notna().sum():>8,}")
-    print(f"    new money unknown (pre-2023)  {out['new_amount_this_filing'].isna().sum():>8,}")
+    print(f"    new money known               {out['raised_since_last_filing'].notna().sum():>8,}")
+    print(f"    new money unknown (pre-2023)  {out['raised_since_last_filing'].isna().sum():>8,}")
     print(f"    flagged merger / acquisition  {out['is_business_combination'].sum():>8,}")
     print(f"    flagged first sale yet to occur {out['first_sale_yet_to_occur'].sum():>6,}")
     print(f"  companies (by CIK)              {out['cik'].nunique():>8,}")
