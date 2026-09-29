@@ -147,7 +147,20 @@ def chain(d: pd.DataFrame) -> pd.DataFrame:
         new_money(a, p, am) for a, p, am in
         zip(acc, prev, d["PREVIOUSACCESSIONNUMBER"].notna())]
 
-    d = d.sort_values(["offering_id", "filing_date", "ACCESSIONNUMBER"])
+    # Number filings by following the links from the original, NOT by date.
+    # A company can file a fundraise and its update on the same day, and the
+    # SEC IDs of two same-day filings do not sort in filing order - so a
+    # date sort once numbered an update 1 and its original 2. Depth along
+    # the chain cannot get that wrong: the original is always 1 step deep.
+    def chain_depth(a):
+        n, seen = 1, set()
+        while isinstance(parent.get(a), str) and a not in seen:
+            seen.add(a)
+            a = parent[a]
+            n += 1
+        return n
+    d["_depth"] = acc.map(chain_depth)
+    d = d.sort_values(["offering_id", "_depth", "filing_date", "ACCESSIONNUMBER"])
     d["filing_number"] = d.groupby("offering_id").cumcount() + 1
     last = d.groupby("offering_id")["filing_number"].transform("max")
     d["is_latest_filing"] = d["filing_number"] == last
