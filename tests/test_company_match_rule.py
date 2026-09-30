@@ -202,35 +202,46 @@ if __name__ == "__main__":
 
 
 class TestCapitalIQDuplicates(unittest.TestCase):
-    """combine_companies.drop_duplicate_companies: one row per company."""
+    """combine_companies.drop_duplicate_companies: a repeated Capital IQ
+    company is kept once ONLY when it is known to be the same company -
+    same name AND same website (or, with no website to compare, same ZIP)."""
 
     def run_(self, rows):
         import pandas as pd
         from combine_companies import drop_duplicate_companies
-        df = pd.DataFrame(rows, columns=["Company Name", "Website", "Revenue"])
-        return drop_duplicate_companies(df, "Company Name")
+        df = pd.DataFrame([(n, w, addr(z) if z else "-", r) for n, w, z, r in rows],
+                          columns=["Company Name", "Website", "Offices", "Revenue"])
+        return drop_duplicate_companies(df, "Company Name", "Website", "Offices")
 
-    def test_most_complete_row_kept(self):
-        kept, removed = self.run_([["Adgero Biopharmaceuticals Holdings, Inc.", "-", "-"],
-                                   ["Adgero Biopharmaceuticals Holdings, Inc.", "adgero.com", "-"]])
-        self.assertEqual(list(kept["Website"]), ["adgero.com"])
+    def test_same_name_same_website_kept_once_most_complete(self):
+        kept, removed = self.run_([["Acme Bio, Inc.", "www.acme.com", "06269", "-"],
+                                   ["ACME BIO INC", "acme.com", "10001", "12.5"]])
+        self.assertEqual(list(kept["Revenue"]), ["12.5"])
         self.assertEqual(len(removed), 1)
 
-    def test_same_name_by_the_rule_is_one_company(self):
-        kept, _ = self.run_([["Alert Ambulance Service Inc", "-", "-"],
-                             ["Alert Ambulance Service Inc.", "-", "-"],
-                             ["Curaleaf Holdings, Inc. (TSX:CURA)", "curaleaf.com", "1268"],
-                             ["Curaleaf Holdings, Inc.", "-", "-"]])
-        self.assertEqual(list(kept["Company Name"]),
-                         ["Alert Ambulance Service Inc", "Curaleaf Holdings, Inc. (TSX:CURA)"])
+    def test_same_name_no_website_same_zip_kept_once(self):
+        """Adgero: same street, suite and ZIP, listed as Pittstown and Princeton."""
+        kept, _ = self.run_([["Adgero Biopharmaceuticals Holdings, Inc.", "-", "08540", "-"],
+                             ["Adgero Biopharmaceuticals Holdings, Inc.", "-", "08540", "-"]])
+        self.assertEqual(len(kept), 1)
 
-    def test_different_names_all_kept_in_order(self):
-        kept, removed = self.run_([["Casimir, LLC", "-", "-"], ["Casimir, Inc.", "-", "-"],
-                                   ["Curaleaf, Inc.", "-", "-"]])
-        self.assertEqual(len(kept), 3)
-        self.assertEqual(len(removed), 0)
-        self.assertEqual(list(kept["Company Name"]), ["Casimir, LLC", "Casimir, Inc.", "Curaleaf, Inc."])
+    def test_same_name_different_websites_stay_separate(self):
+        kept, removed = self.run_([["Beacon Hospice Inc.", "beaconhospice.com", "06108", "-"],
+                                   ["Beacon Hospice, Inc.", "amedisys.com", "04210", "-"]])
+        self.assertEqual((len(kept), len(removed)), (2, 0))
 
-    def test_tie_keeps_the_first(self):
-        kept, _ = self.run_([["Acme Bio, Inc.", "a.com", "-"], ["ACME BIO INC", "b.com", "-"]])
-        self.assertEqual(list(kept["Website"]), ["a.com"])
+    def test_same_name_nothing_to_compare_stays_separate(self):
+        kept, _ = self.run_([["Allcare Medical Inc.", "-", "08872", "-"],
+                             ["Allcare Medical Inc.", "-", "11803", "-"]])
+        self.assertEqual(len(kept), 2)
+
+    def test_different_names_never_merged(self):
+        kept, _ = self.run_([["Casimir, LLC", "casimir.com", "06269", "-"],
+                             ["Casimir, Inc.", "casimir.com", "06269", "-"]])
+        self.assertEqual(len(kept), 2)
+
+    def test_tie_keeps_the_first_and_order_is_kept(self):
+        kept, _ = self.run_([["Zeta Inc.", "-", "-", "-"],
+                             ["Acme Bio, Inc.", "acme.com", "-", "-"],
+                             ["ACME BIO INC", "acme.com", "-", "-"]])
+        self.assertEqual(list(kept["Company Name"]), ["Zeta Inc.", "Acme Bio, Inc."])
