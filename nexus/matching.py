@@ -73,7 +73,11 @@ _FORMS = {
 
 
 _SPELLINGS = {"incorporated", "corporation", "company", "limited"}
-_TICKER = re.compile(r"\s*\([^()]*:[^()]*\)\s*")     # "(NasdaqGS:ORGO)"
+# a country added to a company's name (after its first word)
+_COUNTRY = re.compile(
+    r"(?<= )(united states of america|united states|united kingdom|u s a|u s|usa|us|"
+    r"uk|canada|china|japan|india|germany|france|australia|korea|israel|"
+    r"switzerland|singapore|ireland|europe)(?= )")
 
 
 def name_parts(name: Optional[str]) -> tuple:
@@ -86,19 +90,24 @@ def name_parts(name: Optional[str]) -> tuple:
         "Abceutics"                -> ("abceutics", set())   (not = "Abceutics Inc.")
         "Curaleaf Holdings, Inc."  -> ("curaleaf holdings", {"inc"})
 
-    Only a bracketed TICKER tag is dropped - Capital IQ's "(NasdaqGS:ORGO)".
-    Any other bracketed text is part of the name: "Merck Sharp & Dohme
-    (I.A.) LLC" is not "Merck Sharp & Dohme LLC".
+    Bracketed text and a country added to the name do not change the
+    company, so both are ignored:
+        "AlaMab Therapeutics (Shanghai) Inc."  = "AlaMab Therapeutics Inc."
+        "Zydus Pharmaceuticals USA, Inc."      = "Zydus Pharmaceuticals Inc."
+        "Organogenesis Inc. (NasdaqCM:ORGO)"   = "Organogenesis Inc."
+    A country is only ignored after the first word, so "China Resources"
+    keeps its name.
     """
     if not name:
         return ("", frozenset())
-    t = _TICKER.sub(" ", str(name).lower()).replace("&", " and ")
+    t = _PAREN.sub(" ", str(name).lower()).replace("&", " and ")
     # every Corporation / Company / Limited -> Corp / Co / Ltd, even
     # mid-name: "Cannabist Company Holdings" = "Cannabist Co Holdings"
     words = [_FORMS.get(w, w) if w in _SPELLINGS else w
              for w in _NONALNUM.sub(" ", t).split()]
     if words[:1] == ["the"]:
         words = words[1:]
+    words = words[:1] + _COUNTRY.sub(" ", " " + " ".join(words[1:]) + " ").split()
     forms = set()
     while words and words[-1] in _FORMS:
         forms.add(_FORMS[words.pop()])

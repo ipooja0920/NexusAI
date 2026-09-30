@@ -96,9 +96,9 @@ class TestMatch(unittest.TestCase):
         s = rows(dict(company="Acorda Therapeutics"))
         self.assertEqual(self.match("Acorda Therapeutics, Inc.", s), (None, "unconfirmed"))
 
-    def test_bracketed_entity_is_a_different_name(self):
-        s = rows(dict(company="Merck Sharp & Dohme LLC"))
-        self.assertEqual(self.match("Merck Sharp & Dohme (I.A.) LLC", s), (None, "unconfirmed"))
+    def test_bracketed_text_and_country_ignored(self):
+        s = rows(dict(company="AlaMab Therapeutics (Shanghai) Inc."))
+        self.assertEqual(self.match("AlaMab Therapeutics Inc.", s)[1], "name")
 
 
 if __name__ == "__main__":

@@ -47,9 +47,20 @@ class TestSameName(unittest.TestCase):
         self.assertTrue(same("Organogenesis Holdings Inc. (NasdaqCM:ORGO)",
                              "ORGANOGENESIS HOLDINGS INC"))
 
-    def test_other_bracketed_text_is_part_of_the_name(self):
-        self.assertFalse(same("Merck Sharp & Dohme (I.A.) LLC", "Merck Sharp & Dohme LLC"))
+    def test_bracketed_text_ignored(self):
+        self.assertTrue(same("AlaMab Therapeutics (Shanghai) Inc.", "AlaMab Therapeutics Inc."))
+        self.assertTrue(same("Merck Sharp & Dohme (I.A.) LLC", "Merck Sharp & Dohme LLC"))
         self.assertTrue(same("Curaleaf Holdings, Inc. (TSX:CURA)", "CURALEAF HOLDINGS INC"))
+
+    def test_country_in_the_name_ignored(self):
+        self.assertTrue(same("Zydus Pharmaceuticals USA, Inc.", "Zydus Pharmaceuticals (USA) Inc."))
+        self.assertTrue(same("Legend Biotech USA Inc.", "Legend Biotech Inc."))
+        self.assertTrue(same("Acme U.S.A., Inc.", "Acme, Inc."))
+        self.assertTrue(same("Acme China Ltd", "ACME LIMITED"))
+
+    def test_country_as_first_word_kept(self):
+        self.assertFalse(same("China Resources Inc.", "Resources Inc."))
+        self.assertFalse(same("US Oncology Inc.", "Oncology Inc."))
 
     def test_different_legal_form_is_not_the_same(self):
         self.assertFalse(same("Casimir, LLC", "Casimir, Inc."))

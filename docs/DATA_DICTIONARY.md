@@ -29,8 +29,8 @@ Built by `combine_companies.py` from `data/input/companies_raw.xlsx` and
 |---|---|---|---|---|---|
 | employees_source | text | Where the employee count came from | `Capital IQ` if Capital IQ had a figure; `SBIR (year)` if filled from the company's most recent SBIR award that reports a headcount; blank if neither | `SBIR (2023)` | 972 |
 | sbir_match_name | text | The SBIR company attached to this row, as SBIR spells it | Copied from SBIR. For an ambiguous match, lists the candidates | `AGILIX INC` | 1,089 (957 matched + 132 unconfirmed candidates) |
-| sbir_match_by | text | How the match was made (see Matching rules) | `name`, `name+website`, `name+address`, `website`; or `ambiguous` / `unconfirmed` — nothing attached, candidate shown in sbir_match_name | `name` | 957 matched (844 name, 40 name+website, 53 name+address, 20 website); 132 unconfirmed |
-| sbir_awarded | Yes / No | Has the company ever had an SBIR or STTR award | `Yes` if matched; `No` if not; blank for the ambiguous row | `Yes` | 957 Yes |
+| sbir_match_by | text | How the match was made (see Matching rules) | `name`, `name+website`, `name+address`, `website`; or `ambiguous` / `unconfirmed` — nothing attached, candidate shown in sbir_match_name | `name` | 958 matched (845 name, 40 name+website, 53 name+address, 20 website); 131 unconfirmed |
+| sbir_awarded | Yes / No | Has the company ever had an SBIR or STTR award | `Yes` if matched; `No` if not; blank for the ambiguous row | `Yes` | 958 Yes |
 | sbir_active_usdmm | number ($ millions) | Money on awards still running | Sum of `award_amount` over awards with `award_active_today = True`, in $ millions to 3 decimals (like Capital IQ revenue). Full award value — not what is left unspent, and **not free cash** | `0.551` | 73 |
 | sbir_active_until | date | When the company's SBIR money runs out | Latest `contract_end_date` among active awards | `2027-07-31` | 73 |
 | sbir_agencies | text | Which agencies funded it, and how often | Every award, active or ended, counted per agency, most first | `Department of Energy (4); National Science Foundation (1)` | 957 |
@@ -88,15 +88,15 @@ trials (never ran) are left out of every column; trials with status
 
 | Field | Type | Meaning | How it's derived | Example | Filled |
 |---|---|---|---|---|---|
-| ct_match_name | text | The company as ClinicalTrials.gov spells it (commonest spelling) | For unconfirmed / ambiguous rows, the candidate(s) | `Abiomed Inc.` | 1,646 |
-| ct_match_by | text | How the match was made | `name` only — trial records carry no sponsor website or address, so a similar name cannot be confirmed and stays `unconfirmed` | `name` | 898 name; 748 unconfirmed |
-| ct_university_current | text | Universities / hospitals on its **running** trials | Partners of running trials, most trials first, top 10 then `(+N more)` | `Yale University; UConn Health` | 146 |
-| ct_university_past | text | The same for **ended** trials | Partners of ended trials, minus any in current | `Duke University` | 332 |
-| ct_trials_active | number | Running trials | Count; 0 = matched but nothing running | `3` | 898 (435 above 0) |
-| ct_active_phase | text | Highest phase among running trials | `Phase 1` … `Phase 4`; blank if none running or no phases (e.g. device studies) | `Phase 3` | 311 |
-| ct_last_start_year | year | Year its most recent trial started (or is planned to) | Latest start year | `2025` | 896 |
-| ct_conditions | text | Diseases studied | Most trials first, top 10 then `(+N more)` | `Obesity; Type 2 Diabetes` | 898 |
-| ct_treatment_types | text | Kinds of treatment tested | Drug / Device / Biological / Procedure / …, most trials first ("Other" left out) | `Device; Drug` | 849 |
+| ct_match_name | text | The company as ClinicalTrials.gov spells it (commonest spelling) | For unconfirmed / ambiguous rows, the candidate(s) | `Abiomed Inc.` | 1,645 |
+| ct_match_by | text | How the match was made | `name` only — trial records carry no sponsor website or address, so a similar name cannot be confirmed and stays `unconfirmed` | `name` | 909 name; 736 unconfirmed |
+| ct_university_current | text | Universities / hospitals on its **running** trials | Partners of running trials, most trials first, top 10 then `(+N more)` | `Yale University; UConn Health` | 148 |
+| ct_university_past | text | The same for **ended** trials | Partners of ended trials, minus any in current | `Duke University` | 337 |
+| ct_trials_active | number | Running trials | Count; 0 = matched but nothing running | `3` | 909 (443 above 0) |
+| ct_active_phase | text | Highest phase among running trials | `Phase 1` … `Phase 4`; blank if none running or no phases (e.g. device studies) | `Phase 3` | 319 |
+| ct_last_start_year | year | Year its most recent trial started (or is planned to) | Latest start year | `2025` | 907 |
+| ct_conditions | text | Diseases studied | Most trials first, top 10 then `(+N more)` | `Obesity; Type 2 Diabetes` | 909 |
+| ct_treatment_types | text | Kinds of treatment tested | Drug / Device / Biological / Procedure / …, most trials first ("Other" left out) | `Device; Drug` | 860 |
 
 ### Matching rules
 
@@ -106,8 +106,9 @@ One rule for SBIR and Form D:
    leading "The" are ignored, and Corp = Corporation, Co = Company. The legal
    form must be the same: Inc = Inc, but Inc ≠ LLC and Inc ≠ (none given).
    *NeuroFlow, Inc. = NEUROFLOW INC; Genzyme Corp. = GENZYME CORPORATION.*
-   A bracketed ticker like `(NasdaqGS:ORGO)` is ignored; any other bracketed
-   text is part of the name (*Merck Sharp & Dohme (I.A.) LLC ≠ Merck Sharp & Dohme LLC*).
+   Bracketed text and a country added to the name are ignored too (not as the
+   first word): *AlaMab Therapeutics (Shanghai) Inc. = AlaMab Therapeutics Inc.;
+   Zydus Pharmaceuticals USA, Inc. = Zydus Pharmaceuticals (USA) Inc.*
 2. **Similar name → matched only if confirmed.** Similar = the same only once
    Holdings / Group / International / USA are ignored too, or the legal forms
    differ or one is missing. *Casimir, LLC ~ Casimir, Inc.; Abceutics Inc. ~
