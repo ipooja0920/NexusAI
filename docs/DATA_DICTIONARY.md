@@ -36,8 +36,8 @@ Built by `combine_companies.py` from `data/input/companies_raw.xlsx` and
 | sbir_agencies | text | Which agencies funded it, and how often | Every award, active or ended, counted per agency, most first | `Department of Energy (4); National Science Foundation (1)` | 957 |
 | university_current | text | Research partners on awards still running | Distinct `ri_name` on active awards, `; `-separated | `Stevens Institute of Technology` | 8 |
 | university_past | text | Research partners on awards that have ended | Distinct `ri_name` on ended awards, **excluding** anything in `university_current` | `Boston University; MIT` | 229 |
-| sbir_award_titles | text | Titles of all its SBIR/STTR awards | Newest first, separated by ` \| `; a title repeated (Phase I then II) shown once | `Novel Antigen-Specific Immunomodulatory Tregitope-based Therapy … \| …` | 958 |
-| sbir_abstracts | text | Abstracts of all its awards — what each project is about | Newest first, separated by ` \|\| `; repeats shown once. If more than one Excel cell holds (~32,000 characters), the oldest are left out and counted as `(+N more)` | | 933 (56 cut short) |
+| sbir_award_titles | text | Titles of all its SBIR/STTR awards | Newest award year first; placeholders like "Not Available" left out; separated by ` \| `; a title repeated (Phase I then II) shown once | `Novel Antigen-Specific Immunomodulatory Tregitope-based Therapy … \| …` | 958 |
+| sbir_abstracts | text | Abstracts of all its awards — what each project is about | Newest award year first; "Redacted" / "Not Available" / "TBD" left out; separated by ` \|\| `; repeats shown once. If more than one Excel cell holds (~32,000 characters), the oldest are left out and counted as `(+N more)` | | 933 (56 cut short) |
 
 ### New fields — Form D
 
@@ -246,6 +246,17 @@ Expanded-access programmes (not trials) are dropped.
 ---
 
 ## Things to remember
+
+- **"Active" SBIR awards are judged on the day `combine_companies.py` runs**
+  (contract end date on or after that day), not on the day `sbir_clean.csv`
+  was built.
+- **Research partners** (`university_current` / `university_past`) are listed
+  once whatever their capitals, and never the company itself (a few awards
+  name the company as its own partner).
+- **A Capital IQ employee count of 0** is treated as blank and filled from
+  SBIR (3 rows).
+- **Capital IQ's employee and revenue columns** are written as numbers ("-"
+  stays as "-"), so Excel can sort and sum them.
 
 - **"Active" depends on the day the file is built.** Re-run
   `python clean_sbir.py` and `python combine_companies.py` whenever you

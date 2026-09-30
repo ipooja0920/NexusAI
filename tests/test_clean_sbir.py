@@ -236,6 +236,26 @@ class TestOutputFile(unittest.TestCase):
         self.assertEqual(acme["contract_end_date"].iloc[1], date(2025, 1, 1))
         self.assertTrue(pd.isna(acme["contract_end_date"].iloc[2]))
 
+    def test_newest_award_year_first_even_if_older_contract_runs_longer(self):
+        """QA finding: sorting by end date put a 2016 award with a long
+        contract ahead of a 2024 one, so 'newest' titles and the headcount
+        came from the older award."""
+        out, _ = run([
+            award(Company="Acme Inc", UEI="AAA", **{"Award Year": "2016",
+                  "Contract End Date": "2027-01-01", "Number Employees": "5"}),
+            award(Company="Acme Inc", UEI="AAA", **{"Award Year": "2024",
+                  "Contract End Date": "2025-06-30", "Number Employees": "40"}),
+        ])
+        self.assertEqual(list(out["award_year"]), [2024, 2016])
+        self.assertEqual(out["number_employees"].iloc[0], 40)
+
+    def test_placeholder_title_and_abstract_blanked(self):
+        for text in ("Not Available", "not available", "Redacted", "Redacted.", "TBD"):
+            r = one(**{"Award Title": text, "Abstract": text})
+            self.assertEqual((r["award_title"], r["abstract"]), ("", ""), text)
+        self.assertEqual(one(**{"Award Title": "Not Available Anywhere Else"})["award_title"],
+                         "Not Available Anywhere Else")
+
 
 if __name__ == "__main__":
     unittest.main()

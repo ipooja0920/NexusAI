@@ -58,6 +58,11 @@ RAW_COLUMNS = [
 # 15,222 rows.
 NO_INSTITUTION = {"", "stub", "n/a", "na", "none", "nan", "-"}
 
+# Placeholders in the title / abstract columns: "Not Available" is the
+# title of 7,148 awards; "Redacted" and "TBD" stand in for abstracts.
+NO_TEXT = {"", "not available", "abstract not available", "redacted",
+           "redacted.", "tbd", "n/a", "na", "none", "nan", "-", "not applicable"}
+
 
 OUT_COLUMNS = [
     "company", "uei", "agency", "award_title", "abstract", "award_amount",
@@ -70,6 +75,11 @@ def _text(s: pd.Series) -> pd.Series:
     """Trimmed text; newlines flattened so a row stays one line in Excel."""
     return (s.fillna("").astype(str)
              .str.replace(r"\s+", " ", regex=True).str.strip())
+
+
+def _no_placeholder(s: pd.Series) -> pd.Series:
+    """Blank out "Not Available", "Redacted", "TBD" and the like."""
+    return s.where(~s.str.lower().isin(NO_TEXT), "")
 
 
 def load_awards(path: Path) -> pd.DataFrame:
@@ -85,8 +95,8 @@ def load_awards(path: Path) -> pd.DataFrame:
         # when one company works in several and is later folded into a
         # single Capital IQ row.
         "agency": _text(raw["Agency"]),
-        "award_title": _text(raw["Award Title"]),
-        "abstract": _text(raw["Abstract"]),
+        "award_title": _no_placeholder(_text(raw["Award Title"])),
+        "abstract": _no_placeholder(_text(raw["Abstract"])),
         "award_amount": pd.to_numeric(raw["Award Amount"], errors="coerce"),
         "award_year": pd.to_numeric(raw["Award Year"], errors="coerce"),
         "contract_end_date": pd.to_datetime(raw["Contract End Date"],
@@ -144,9 +154,11 @@ def clean(src: Path, today) -> tuple:
     a["award_year"] = a["award_year"].astype("Int64")
     a["number_employees"] = a["number_employees"].astype("Int64")
 
-    # a company's awards together, newest first
+    # a company's awards together, newest AWARD first (then latest end
+    # date) - sorting by end date first put an old award with a long
+    # contract ahead of newer ones
     a["_key"] = key
-    a = a.sort_values(["_key", "contract_end_date", "award_year"],
+    a = a.sort_values(["_key", "award_year", "contract_end_date"],
                       ascending=[True, False, False], na_position="last")
     return a[OUT_COLUMNS].reset_index(drop=True), key
 

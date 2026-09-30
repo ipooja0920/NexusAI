@@ -246,6 +246,19 @@ def _distinct_text(values) -> list:
     return out
 
 
+def _partners(values, own_names: set) -> list:
+    """Distinct research partners, first spelling kept, capitals ignored,
+    minus any that is the company itself."""
+    seen, out = set(), []
+    for v in values:
+        if isinstance(v, str) and v.strip():
+            k = v.strip().lower()
+            if k not in seen and normalise_company_name(v) not in own_names:
+                seen.add(k)
+                out.append(v.strip())
+    return out
+
+
 def _distinct(values) -> list:
     seen, out = set(), []
     for v in values:
@@ -260,21 +273,32 @@ def summarise_sbir(path: Path) -> dict:
     companies that never had one."""
     a = pd.read_csv(path, dtype=str, usecols=SBIR_READ, low_memory=False)
     a["award_amount"] = pd.to_numeric(a["award_amount"], errors="coerce")
-    a["active"] = a["award_active_today"].str.lower() == "true"
     a["contract_end_date"] = pd.to_datetime(a["contract_end_date"],
                                             errors="coerce")
+    # "active" as of the day the COMBINED file is built - the flag stored in
+    # sbir_clean.csv is as of the day that file was built, and goes stale
+    a["active"] = a["contract_end_date"] >= pd.Timestamp.today().normalize()
     a["number_employees"] = pd.to_numeric(a["number_employees"], errors="coerce")
     a["award_year"] = pd.to_numeric(a["award_year"], errors="coerce")
     a["norm"] = a["company"].map(normalise_company_name)
     a["key"] = a["uei"].where(a["uei"].fillna("") != "", "NAME:" + a["norm"])
-    # sbir_clean.csv is already newest-first within each company
+    # newest award first within each company (stable, so the file order
+    # breaks ties): titles, abstracts and the headcount all read from it
+    a = a.sort_values(["key", "award_year", "contract_end_date"],
+                      ascending=[True, False, False], na_position="last",
+                      kind="stable")
 
     out = {}
     for key, g in a.groupby("key", sort=False):
         act = g[g["active"]]
-        current = _distinct(act["ri_name"])
-        past = [x for x in _distinct(g.loc[~g["active"], "ri_name"])
-                if x not in current]
+        # research partners, each once whatever its capitals ("ROSWELL PARK
+        # CANCER INSTITUTE" = "Roswell Park Cancer Institute"), and never the
+        # company itself - a few awards list the company as its own partner
+        own = set(g["norm"])
+        current = _partners(act["ri_name"], own)
+        cur_keys = {x.lower() for x in current}
+        past = [x for x in _partners(g.loc[~g["active"], "ri_name"], own)
+                if x.lower() not in cur_keys]
         agencies = Counter(x for x in g["agency"] if isinstance(x, str) and x)
         # headcount from the MOST RECENT award that reports one (rows are
         # newest first); zero is a blank, not a company with no staff
@@ -290,7 +314,9 @@ def summarise_sbir(path: Path) -> dict:
             "sbir_active_usdmm": round(act["award_amount"].sum() / 1e6, 3) if len(act) else None,
             # a plain ISO string, so Excel shows 2026-12-31, not a datetime
             "sbir_active_until": act["contract_end_date"].max().strftime("%Y-%m-%d") if len(act) else None,
-            "sbir_agencies": "; ".join(f"{n} ({c})" for n, c in agencies.most_common()),
+            # most awards first, ties alphabetical - so a re-run gives the same text
+            "sbir_agencies": "; ".join(f"{n} ({c})" for n, c in sorted(
+                agencies.items(), key=lambda kv: (-kv[1], kv[0]))),
             "university_current": "; ".join(current),
             "university_past": "; ".join(past),
             # every award's title and abstract, newest first, repeats once
@@ -812,6 +838,13 @@ def main() -> int:
     # right beside the employees column, so the two are read together
     combined.insert(combined.columns.get_loc(emp_col) + 1,
                     "employees_source", source)
+    # Capital IQ's number columns are read as text (to keep "-" exactly as
+    # exported); write real numbers back so Excel can sort and sum them
+    rev_col_name = list(raw.columns)[column_index_from_string(
+        str(cfg.capitaliq["col_revenue"])) - 1]
+    for col in (emp_col, rev_col_name):
+        num = pd.to_numeric(combined[col], errors="coerce")
+        combined[col] = num.astype(object).where(num.notna(), combined[col])
     out_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with pd.ExcelWriter(out_path, engine="openpyxl") as w:
