@@ -26,8 +26,8 @@ public companies only, figures from their own SEC filings:
                                      listed)
   xbrl_rd_expense_usdmm R&D spend in the latest calendar year, $ millions
   xbrl_rd_year          that year
-  xbrl_revenue_usdmm    revenue in the latest calendar year, $ millions
-  xbrl_revenue_year     that year
+  (revenue has no column of its own: it goes straight into Capital IQ's
+   revenue column where that is blank - see revenue_source)
   xbrl_cash_usdmm       cash on the latest balance sheet, $ millions
   xbrl_short_term_investments_usdmm
                         securities it can sell within a year, same balance
@@ -132,7 +132,6 @@ FORMD_COLUMNS = [
 XBRL_COLUMNS = [
     "xbrl_match_name", "xbrl_match_by",
     "xbrl_rd_expense_usdmm", "xbrl_rd_year",
-    "xbrl_revenue_usdmm", "xbrl_revenue_year",
     "xbrl_cash_usdmm", "xbrl_short_term_investments_usdmm", "xbrl_cash_as_of",
 ]
 
@@ -530,6 +529,10 @@ def main() -> int:
     xbrl_path = cfg.cache_dir / "xbrl_clean.csv"
     xb_added = {c: [None] * len(raw) for c in XBRL_COLUMNS}
     xb_counts = Counter()
+    # SEC revenue is not a column of its own - it only fills blank
+    # Capital IQ revenue below - so it is held here instead
+    xb_rev = [None] * len(raw)
+    xb_rev_year = [None] * len(raw)
     if xbrl_path.exists():
         xbrl = summarise_xbrl(xbrl_path)
         ticker_ciks = load_ticker_ciks(cfg.sources_dir / "xbrl" / "company_tickers.json")
@@ -548,6 +551,8 @@ def main() -> int:
             xb_added["xbrl_match_by"][i] = how
             for c in XBRL_COLUMNS[2:]:
                 xb_added[c][i] = x.get(c)
+            xb_rev[i] = x.get("xbrl_revenue_usdmm")
+            xb_rev_year[i] = x.get("xbrl_revenue_year")
     else:
         print(f"  {xbrl_path.name} not found - run 'python clean_xbrl.py'; XBRL columns left blank")
 
@@ -566,9 +571,9 @@ def main() -> int:
     for i in range(len(combined)):
         if not _no_revenue(combined.at[i, rev_col]):
             rev_source.append("Capital IQ")
-        elif xb_added["xbrl_revenue_usdmm"][i] is not None:
-            combined.at[i, rev_col] = str(xb_added["xbrl_revenue_usdmm"][i])
-            rev_source.append(f"SEC XBRL ({xb_added['xbrl_revenue_year'][i]})")
+        elif xb_rev[i] is not None:
+            combined.at[i, rev_col] = str(xb_rev[i])
+            rev_source.append(f"SEC XBRL ({xb_rev_year[i]})")
         else:
             rev_source.append(None)
     combined.insert(combined.columns.get_loc(rev_col) + 1,
@@ -630,7 +635,7 @@ def main() -> int:
     print(f"    by ticker            {xb_counts['ticker']:>7,}")
     print(f"    by Form D CIK        {xb_counts['formd_cik']:>7,}")
     print(f"  with R&D expense       {xb['xbrl_rd_expense_usdmm'].notna().sum():>7,}")
-    print(f"  with revenue           {xb['xbrl_revenue_usdmm'].notna().sum():>7,}")
+    print(f"  with revenue           {sum(v is not None for v in xb_rev):>7,}")
     print(f"  with cash              {xb['xbrl_cash_usdmm'].notna().sum():>7,}")
     rs = combined["revenue_source"].fillna("")
     print(f"\n  revenue from Capital IQ    {(rs == 'Capital IQ').sum():>7,}")
