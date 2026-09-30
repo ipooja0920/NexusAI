@@ -19,23 +19,23 @@ Built by `combine_companies.py` from `data/input/companies_raw.xlsx` and
 
 | Field | Type | What changed | Example | Filled |
 |---|---|---|---|---|
-| Total Employees [Latest Annual] | number | Capital IQ value kept as is. Where Capital IQ is blank, the SBIR headcount is filled in. | `205` | 1,010 real counts (352 Capital IQ + 658 SBIR) |
-| Total Revenue [LTM] ($USDmm) | number ($ millions) | Capital IQ value kept as is. Where Capital IQ shows `-` (no figure), the SEC XBRL revenue is filled in, **however old** — an old real figure beats none. Capital IQ's `0` is a reported zero and is left alone. | `564.169` | 6,271 Capital IQ + 13 SEC |
+| Total Employees [Latest Annual] | number | Capital IQ value kept as is. Where Capital IQ is blank, the SBIR headcount is filled in. | `205` | 990 real counts (352 Capital IQ + 638 SBIR) |
+| Total Revenue [LTM] ($USDmm) | number ($ millions) | Capital IQ value kept as is. Where Capital IQ shows `-` (no figure), the SEC XBRL revenue is filled in, **however old** — an old real figure beats none. Capital IQ's `0` is a reported zero and is left alone. | `564.169` | 6,271 Capital IQ + 9 SEC |
 | revenue_source *(new, beside revenue)* | text | `Capital IQ`, or `SEC XBRL (year)` when filled from SEC — the year shows how old it is | `SEC XBRL (2023)` | |
 
 ### New fields
 
 | Field | Type | Meaning | How it's derived | Example | Filled |
 |---|---|---|---|---|---|
-| employees_source | text | Where the employee count came from | `Capital IQ` if Capital IQ had a figure; `SBIR (year)` if filled from the company's most recent SBIR award that reports a headcount; blank if neither | `SBIR (2023)` | 1,010 |
-| sbir_match_name | text | The SBIR company attached to this row, as SBIR spells it | Copied from SBIR. For an ambiguous match, lists the candidates | `AGILIX INC` | 1,066 |
-| sbir_match_by | text | How the match was made | `name` — normalised names are equal; `website` — no name match but the website domain belongs to exactly one SBIR company; `name+suffix` — names match and websites differ, but the legal suffix (Inc / LLC / Ltd…) agrees; `ambiguous` — one name, several SBIR companies, nothing attached | `name` | 1,066 |
-| sbir_awarded | Yes / No | Has the company ever had an SBIR or STTR award | `Yes` if matched; `No` if not; blank for the ambiguous row | `Yes` | 21,805 (1,065 Yes) |
-| sbir_active_usdmm | number ($ millions) | Money on awards still running | Sum of `award_amount` over awards with `award_active_today = True`, in $ millions to 3 decimals (like Capital IQ revenue). Full award value — not what is left unspent, and **not free cash** | `0.551` | 76 |
-| sbir_active_until | date | When the company's SBIR money runs out | Latest `contract_end_date` among active awards | `2027-07-31` | 76 |
-| sbir_agencies | text | Which agencies funded it, and how often | Every award, active or ended, counted per agency, most first | `Department of Energy (4); National Science Foundation (1)` | 1,062 |
-| university_current | text | Research partners on awards still running | Distinct `ri_name` on active awards, `; `-separated | `Stevens Institute of Technology` | 9 |
-| university_past | text | Research partners on awards that have ended | Distinct `ri_name` on ended awards, **excluding** anything in `university_current` | `Boston University; MIT` | 245 |
+| employees_source | text | Where the employee count came from | `Capital IQ` if Capital IQ had a figure; `SBIR (year)` if filled from the company's most recent SBIR award that reports a headcount; blank if neither | `SBIR (2023)` | 990 |
+| sbir_match_name | text | The SBIR company attached to this row, as SBIR spells it | Copied from SBIR. For an ambiguous match, lists the candidates | `AGILIX INC` | 1,089 (994 matched + 95 unconfirmed candidates) |
+| sbir_match_by | text | How the match was made (see Matching rules) | `name`, `name+website`, `name+address`, `website`; or `ambiguous` / `unconfirmed` — nothing attached, candidate shown in sbir_match_name | `name` | 994 matched (916 name, 29 name+website, 29 name+address, 20 website); 95 unconfirmed |
+| sbir_awarded | Yes / No | Has the company ever had an SBIR or STTR award | `Yes` if matched; `No` if not; blank for the ambiguous row | `Yes` | 994 Yes |
+| sbir_active_usdmm | number ($ millions) | Money on awards still running | Sum of `award_amount` over awards with `award_active_today = True`, in $ millions to 3 decimals (like Capital IQ revenue). Full award value — not what is left unspent, and **not free cash** | `0.551` | 74 |
+| sbir_active_until | date | When the company's SBIR money runs out | Latest `contract_end_date` among active awards | `2027-07-31` | 74 |
+| sbir_agencies | text | Which agencies funded it, and how often | Every award, active or ended, counted per agency, most first | `Department of Energy (4); National Science Foundation (1)` | 994 |
+| university_current | text | Research partners on awards still running | Distinct `ri_name` on active awards, `; `-separated | `Stevens Institute of Technology` | 8 |
+| university_past | text | Research partners on awards that have ended | Distinct `ri_name` on ended awards, **excluding** anything in `university_current` | `Boston University; MIT` | 234 |
 
 ### New fields — Form D
 
@@ -43,15 +43,14 @@ Added after the SBIR block. From `data/cache/formd_clean.csv`.
 
 | Field | Type | Meaning | How it's derived | Example | Filled |
 |---|---|---|---|---|---|
-| formd_match_name | text | The Form D company attached, as SEC spells it (latest name) | Copied from Form D. For an ambiguous match, lists the candidates | `REVBIO, INC.` | 1,067 |
-| formd_match_by | text | How the match was made | `name` — normalised names equal; `ambiguous` — one name, several Form D companies, state couldn't pick one | `name` | 1,067 |
-| formd_raised | Yes / No | Has raised private money in the filings we hold (2023 onward) | `Yes` if any real filing (not a merger, not "yet to occur") reports money raised | `Yes` | 1,013 Yes |
-| formd_recent_usdmm | number ($ millions) | Money raised since `combine.formd_recent_from` in `config.yaml` (now 2025-01-01) | Sum of `raised_since_last_filing` over: updates filed on/after the date, and first filings whose **first sale** is on/after it. Mergers and "yet to occur" never count. **Free cash** — unlike SBIR, investors' money can be spent on sponsored research | `3.115` | 451 |
+| formd_match_name | text | The Form D company attached, as SEC spells it (latest name) | Copied from Form D. For an ambiguous match, lists the candidates | `REVBIO, INC.` | 1,076 (1,000 matched + 76 unconfirmed / ambiguous candidates) |
+| formd_match_by | text | How the match was made (see Matching rules) | `name`, `name+address`; or `ambiguous` / `unconfirmed` — nothing attached | `name` | 1,000 matched (986 name, 14 name+address); 75 unconfirmed, 1 ambiguous |
+| formd_raised | Yes / No | Has raised private money in the filings we hold (2023 onward) | `Yes` if any real filing (not a merger, not "yet to occur") reports money raised | `Yes` | 950 Yes |
+| formd_recent_usdmm | number ($ millions) | Money raised since `combine.formd_recent_from` in `config.yaml` (now 2025-01-01) | Sum of `raised_since_last_filing` over: updates filed on/after the date, and first filings whose **first sale** is on/after it. Mergers and "yet to occur" never count. **Free cash** — unlike SBIR, investors' money can be spent on sponsored research | `3.115` | 422 |
 | formd_last_year | year | Last year the company raised new money | Year of the latest filing with `raised_since_last_filing` > 0 | `2025` | |
 | formd_industry_group | text | Industry the company gave SEC | Every value across its filings, most recent first | `Biotechnology` | |
 
-Form D has no website, so matching is **name only**, with the state used to
-choose between two companies of the same name and to confirm a short name.
+Form D has no website, so a similar (not identical) name can only be confirmed by **ZIP code**.
 Filings are grouped by **CIK** (SEC's company ID), so a company that renamed
 itself keeps all its raises — Liberation Labs Holdings → Liberation
 Bioindustries.
@@ -63,15 +62,15 @@ companies only — figures come from their own SEC filings.
 
 | Field | Type | Meaning | How it's derived | Example | Filled |
 |---|---|---|---|---|---|
-| xbrl_match_name | text | The company as SEC names it (latest name) | Copied from XBRL | `Amylyx Pharmaceuticals, Inc.` | 322 |
-| xbrl_match_by | text | How the match was made | `ticker` — Capital IQ ticker → SEC's ticker list → CIK; `formd_cik` — no usable ticker, but the Form D match's CIK files with SEC (raised privately, then listed; or an OTC / foreign ticker SEC doesn't list) | `ticker` | 289 ticker, 33 formd_cik |
-| xbrl_rd_expense_usdmm | number ($ millions) | R&D spend in the latest calendar year reported | Latest `rd_expense` year in `xbrl_clean.csv` | `90.404` | 293 |
+| xbrl_match_name | text | The company as SEC names it (latest name) | Copied from XBRL | `Amylyx Pharmaceuticals, Inc.` | 313 |
+| xbrl_match_by | text | How the match was made | `ticker` — Capital IQ ticker → SEC's ticker list → CIK; `formd_cik` — no usable ticker, but the Form D match's CIK files with SEC (raised privately, then listed; or an OTC / foreign ticker SEC doesn't list) | `ticker` | 289 ticker, 24 formd_cik |
+| xbrl_rd_expense_usdmm | number ($ millions) | R&D spend in the latest calendar year reported | Latest `rd_expense` year in `xbrl_clean.csv` | `90.404` | 284 |
 | xbrl_rd_year | year | That year | | `2025` | |
-| xbrl_cash_usdmm | number ($ millions) | Cash on the latest balance sheet | Latest quarter-end with cash or short-term investments | `23.37` (Corbus) | 302 |
+| xbrl_cash_usdmm | number ($ millions) | Cash on the latest balance sheet | Latest quarter-end with cash or short-term investments | `23.37` (Corbus) | 293 |
 | xbrl_short_term_investments_usdmm | number ($ millions) | Securities it can sell within a year, **same balance sheet** as the cash. Blank = none reported that quarter | Same quarter-end as the cash | `94.571` (Corbus) | |
-| xbrl_cash_total_usdmm | number ($ millions) | Everything it could draw on that day | Cash + short-term investments on the same balance sheet (a missing one counts as 0) — or the company's **own reported total** for that day if that is more than 1% larger, which catches investments filed under a label we don't read (and sometimes longer-dated investments it also counts as available) | `117.941` (Corbus, 30 Jun 2026) | 302 |
-| xbrl_cash_total_from | text | Where the total came from | `cash + short-term`, or `company's own total` | `cash + short-term` | 302 |
-| xbrl_cash_as_of | date | Date of that balance sheet | A quarter-end | `2026-06-30` (277 of 302) | 302 |
+| xbrl_cash_total_usdmm | number ($ millions) | Everything it could draw on that day | Cash + short-term investments on the same balance sheet (a missing one counts as 0) — or the company's **own reported total** for that day if that is more than 1% larger, which catches investments filed under a label we don't read (and sometimes longer-dated investments it also counts as available) | `117.941` (Corbus, 30 Jun 2026) | 294 |
+| xbrl_cash_total_from | text | Where the total came from | `cash + short-term`, or `company's own total` | `cash + short-term` | 294 (274 cash + short-term, 20 company's own total) |
+| xbrl_cash_as_of | date | Date of that balance sheet | A quarter-end | `2026-06-30` (277 of 302) | 294 |
 
 SEC revenue has no column of its own: it goes straight into Capital IQ's
 revenue column where Capital IQ is blank, and `revenue_source` says so (see
@@ -83,16 +82,27 @@ now" — like Form D, and unlike SBIR, it is free cash.
 
 ### Matching rules
 
-- **Name first, website second.** Names are compared after normalising
-  (case, punctuation and suffixes like Inc / LLC / Corp removed).
-- **Same name, several SBIR companies** — the website, then the state,
-  picks one. If neither does, the row is `ambiguous` and nothing is attached.
-- **A match is rejected** only if the websites actively disagree, or the
-  name is too generic on its own. A different state never rejects a match.
-- **Websites disagree but the legal suffix agrees** (NeuroFlow, Inc. =
-  NEUROFLOW INC) — accepted as `name+suffix`. This catches subsidiaries that
-  Capital IQ lists under their parent's website. It never overrides the
-  too-generic rule, so short acronyms like `ACT` or `DPD` stay rejected.
+One rule for SBIR and Form D:
+
+1. **Same name → matched** (`name`). Same once case, spaces, punctuation and a
+   leading "The" are ignored, and Corp = Corporation, Co = Company. The legal
+   form must not contradict: Inc = Inc, Inc = (none given), but Inc ≠ LLC.
+   *NeuroFlow, Inc. = NEUROFLOW INC; Genzyme Corp. = GENZYME CORPORATION.*
+2. **Similar name → matched only if confirmed.** Similar = the same only once
+   Holdings / Group / International / USA are ignored too, or the legal forms
+   differ. *Casimir, LLC ~ Casimir, Inc.; Curaleaf, Inc. ~ Curaleaf Holdings, Inc.*
+   - both have a website → the websites must match (`name+website`); if they
+     differ it is a different company
+   - otherwise → the ZIP codes must match (`name+address`)
+   - not confirmed → nothing attached, `unconfirmed`, candidate shown
+3. **Website only (SBIR)** — no name matches, but the website belongs to
+   exactly one SBIR company: a rename (`website`).
+
+A **very short name** ("Meta, Inc.", "PCT, LLC", "SST Corporation") counts as
+similar even when identical, and must be confirmed too — Meta, Inc. on Long
+Island is not the SBIR "Meta" in San Jose. **Namesakes** (two companies with
+the same name) are told apart by website or ZIP; if nothing picks one, the
+row is `ambiguous`.
 
 ---
 

@@ -44,7 +44,7 @@ No name matching at all: a ticker or a CIK belongs to exactly one company.
 FORM D columns (from data/cache/formd_clean.csv, built by clean_formd.py):
 
   formd_match_name      the Form D company attached, as SEC spells it
-  formd_match_by        name | ambiguous
+  formd_match_by        name | name+address | ambiguous | unconfirmed
   formd_raised          Yes if it has raised private money in the filings
                         we hold (2023 onward); No if not
   formd_recent_usdmm    money raised on or after combine.formd_recent_from,
@@ -53,37 +53,33 @@ FORM D columns (from data/cache/formd_clean.csv, built by clean_formd.py):
   formd_last_year       year of the latest filing that brought in new money
   formd_industry_group  industry the company gave SEC, most recent first
 
-Form D matching is by NAME only - it has no website column - with the
-state used to choose between two companies of the same name and to confirm
-a name that is too short to trust on its own.
+MATCHING - one rule for SBIR and Form D (match_company below):
 
-SBIR matching - name first, website as fallback:
+  1. SAME NAME -> matched ("name"). Same once case, spaces, punctuation and
+     a leading "The" are ignored, and Corp = Corporation, Co = Company. The
+     legal form must not contradict: Inc = Inc, Inc = (none), Inc != LLC.
+  2. SIMILAR NAME -> matched only if confirmed. Similar = the same once
+     Holdings / Group / International / USA are also ignored, or the legal
+     forms differ ("Casimir, LLC" ~ "Casimir, Inc.").
+       * both have a website -> the websites must match   ("name+website")
+       * otherwise           -> the ZIP codes must match   ("name+address")
+     Not confirmed -> nothing attached, marked "unconfirmed" with the
+     candidate named, so it can be checked by eye.
+  3. WEBSITE ONLY (SBIR) -> no name matches, but the website belongs to
+     exactly one SBIR company: a rename                    ("website")
 
-  * NAME. The Capital IQ name and the SBIR name normalise to the same key.
-    If two different SBIR companies share that name (e.g. ADELPHI
-    TECHNOLOGY in Kentucky and in California), the website or state
-    decides; if neither does, nothing is attached and the row is marked
-    "ambiguous" with both candidates named, so it can be settled by eye.
-
-  * WEBSITE. When no name matches, the Capital IQ website domain is looked
-    up among SBIR websites. Only a domain belonging to exactly one SBIR
-    company counts. This is what catches rebrands, where the name changed
-    but the business did not.
-
-A name match is rejected only when the websites actively disagree, or the
-name is too generic to mean anything on its own - the shared rule in
-nexus/matching.py. A different STATE never rejects a match: companies move,
-and SBIR freezes the address as at each award.
+  A very short name ("Meta, Inc.", "PCT, LLC") counts as similar even when
+  identical - it must be confirmed too. Two companies of the same name
+  (namesakes) are told apart by website / ZIP; if nothing picks one, the
+  row is "ambiguous". Form D has no websites, so only ZIP can confirm.
 
 Columns added:
 
   sbir_match_name      the SBIR company attached, as SBIR spells it
-  sbir_match_by        name | name+suffix | website | ambiguous
-                       (name+suffix: names match, websites differ, legal
-                       suffix agrees - e.g. a subsidiary listed under its
-                       parent's website)
+  sbir_match_by        name | name+website | name+address | website |
+                       ambiguous | unconfirmed  (see MATCHING above)
   sbir_awarded         Yes if the company has ever had an SBIR/STTR award,
-                       No if not, blank if the match was ambiguous
+                       No if not, blank if ambiguous / unconfirmed
   sbir_active_usdmm    sum of awards whose contract is still running, $ millions
   sbir_active_until    latest end date among active awards
   sbir_agencies        funding agencies with award counts, most first
@@ -118,9 +114,9 @@ from pathlib import Path
 import pandas as pd
 from openpyxl.utils import column_index_from_string
 
-from nexus.matching import (is_too_generic, legal_suffix, match_confidence,
+from nexus.matching import (is_too_generic, name_parts, same_name,
                             normalise_company_name, state_code,
-                            state_from_address, website_domain)
+                            website_domain, zip5, zip_from_address)
 from nexus.settings import Settings
 
 SBIR_COLUMNS = [
@@ -144,13 +140,13 @@ XBRL_COLUMNS = [
 FORMD_READ = ["company", "cik", "state", "filing_number", "filing_date",
               "first_sale_date", "first_sale_yet_to_occur",
               "total_raised_to_date", "raised_since_last_filing",
-              "industry_group", "is_business_combination"]
+              "industry_group", "is_business_combination", "zip"]
 
 # The per-award text is deliberately NOT read here. Titles and abstracts
 # stay in sbir_clean.csv until the matching step decides how to use them.
 SBIR_READ = ["company", "uei", "agency", "award_amount", "contract_end_date",
              "award_active_today", "ri_name", "company_website", "state",
-             "number_employees", "award_year"]
+             "number_employees", "award_year", "zip"]
 
 
 # ----------------------------------------------------------------------
@@ -218,6 +214,8 @@ def summarise_sbir(path: Path) -> dict:
             "norm": g["norm"].iloc[0],
             "states": {s for s in g["state"].map(state_code) if s},
             "domains": {d for d in g["company_website"].map(website_domain) if d},
+            "exacts": set(g["company"].map(name_parts)),
+            "zips": {z for z in g["zip"].map(zip5) if z},
             # $ millions to 3 decimals (nearest $1,000), like Capital IQ revenue ($USDmm)
             "sbir_active_usdmm": round(act["award_amount"].sum() / 1e6, 3) if len(act) else None,
             # a plain ISO string, so Excel shows 2026-12-31, not a datetime
@@ -292,6 +290,9 @@ def summarise_formd(path: Path, recent_from) -> dict:
             "name": g["company"].iloc[0],
             "norm": g["norm"].iloc[0],
             "states": {s for s in g["state"].map(state_code) if s},
+            "exacts": set(g["company"].map(name_parts)),
+            "zips": {z for z in g["zip"].map(zip5) if z},
+            "domains": set(),                  # Form D has no website
             # ever raised real money in the filings we hold (2023 onward)
             "formd_raised": "Yes" if (real[g.index] &
                                       (g["total_raised_to_date"] > 0)).any() else "No",
@@ -305,22 +306,9 @@ def summarise_formd(path: Path, recent_from) -> dict:
 
 
 def match_formd(name, address, formd, by_name) -> tuple:
-    """(cik or None, how, note). Name only - Form D has no website - with
-    the state used to pick between namesakes and to confirm a short name."""
-    key = normalise_company_name(name)
-    our_state = state_from_address(address)
-    cands = by_name.get(key, []) if key else []
-    if len(cands) > 1:
-        by_state = [k for k in cands if our_state and our_state in formd[k]["states"]]
-        if len(by_state) != 1:
-            return None, "ambiguous", " / ".join(sorted({formd[k]["name"] for k in cands}))
-        cands = by_state
-    if len(cands) == 1:
-        f = formd[cands[0]]
-        if match_confidence(key, our_state, f["states"]) == "suspect":
-            return None, "rejected", f["name"]
-        return cands[0], "name", None
-    return None, None, None
+    """(cik or None, how, note) - see match_company. Form D has no website,
+    so a name that is only similar must be confirmed by ZIP code."""
+    return match_company(name, None, address, formd, by_name)
 
 
 # ----------------------------------------------------------------------
@@ -450,48 +438,64 @@ def fill_revenue(ciq: list, sec: list, sec_year: list) -> tuple:
 # The join
 # ----------------------------------------------------------------------
 
-def match_one(name, website, address, sbir, by_name, by_domain) -> tuple:
-    """(sbir_key or None, how, note)."""
+def match_company(name, website, address, data, by_name, by_domain=None) -> tuple:
+    """(key or None, how, note). The one matching rule, for every source:
+
+      1. SAME NAME - identical once case, spaces, punctuation and a
+         leading "The" are ignored, with the legal form not contradicting
+         ("NeuroFlow, Inc." = "NEUROFLOW INC"; "Genzyme Corp." =
+         "Genzyme Corporation"; "Abceutics Inc." = "Abceutics")  -> "name"
+      2. SIMILAR NAME - only the same once Holdings / Group / International
+         / USA are ignored too, or the legal forms differ ("Casimir, LLC" ~
+         "Casimir, Inc."; "Curaleaf, Inc." ~ "Curaleaf Holdings, Inc.").
+         Only a match if confirmed:
+           * both have a website  -> the websites must match -> "name+website"
+             (and if they differ, it is NOT the same company)
+           * otherwise            -> the ZIP codes must match -> "name+address"
+         Not confirmed -> nothing attached, how = "unconfirmed".
+      3. WEBSITE ONLY - no name matches, but the website belongs to exactly
+         one company in the source (a rename)               -> "website"
+
+    One exception to step 1: a very short name ("Meta, Inc.", "PCT, LLC",
+    "SST Corporation") is shared by many unrelated companies, so even an
+    identical name must be confirmed by website or ZIP. (Meta, Inc. on Long
+    Island is not the SBIR "Meta" in San Jose.)
+    """
+    ours = name_parts(name)
     key = normalise_company_name(name)
     our_domain = website_domain(website)
-    our_state = state_from_address(address)
-
+    our_zip = zip_from_address(address)
     cands = by_name.get(key, []) if key else []
-    if len(cands) > 1:
-        # Same name, different companies. Let the website, then the state,
-        # decide - and only if it picks out exactly one.
-        by_site = [k for k in cands if our_domain and our_domain in sbir[k]["domains"]]
-        by_state = [k for k in cands if our_state and our_state in sbir[k]["states"]]
-        pick = by_site if len(by_site) == 1 else by_state if len(by_state) == 1 else []
-        if len(pick) != 1:
-            names = " / ".join(sorted({sbir[k]["name"] for k in cands}))
-            return None, "ambiguous", names
-        cands = pick
 
-    if len(cands) == 1:
-        s = sbir[cands[0]]
-        conf = match_confidence(key, our_state, s["states"], our_domain, s["domains"])
-        if conf == "suspect":
-            # The websites disagree - normally a sign of two different
-            # companies sharing a name (Casimir, LLC at casimirtrials.com vs
-            # CASIMIR, INC at casimirspace.com). But Capital IQ often lists a
-            # subsidiary under its PARENT's website: NeuroFlow, Inc. shows
-            # quartethealth.com. A matching legal suffix breaks the tie.
-            #
-            # It never overrides the too-generic rule: "ACT Group, Inc." and
-            # "Act Inc" share a suffix and are still not safe to join.
-            websites_differ = bool(our_domain and s["domains"]
-                                   and our_domain not in s["domains"])
-            our_sfx, their_sfx = legal_suffix(name), legal_suffix(s["name"])
-            if (websites_differ and not is_too_generic(key)
-                    and our_sfx and our_sfx == their_sfx):
-                return cands[0], "name+suffix", None
-            return None, "rejected", s["name"]
-        return cands[0], "name", None
+    same = [k for k in cands if any(same_name(ours, t) for t in data[k]["exacts"])]
+    if len(same) == 1 and not is_too_generic(key):
+        return same[0], "name", None
 
-    if our_domain and our_domain in by_domain:
+    def confirmed(k):
+        d = data[k]
+        if our_domain and d["domains"]:
+            return "name+website" if our_domain in d["domains"] else None
+        if our_zip and our_zip in d["zips"]:
+            return "name+address"
+        return None
+
+    ok = [(k, h) for k in cands if (h := confirmed(k))]
+    if len(ok) == 1:
+        return ok[0][0], ok[0][1], None
+    names = " / ".join(sorted({data[k]["name"] for k in cands}))
+    if len(ok) > 1 or len(same) > 1:
+        return None, "ambiguous", names
+    if cands:
+        return None, "unconfirmed", names
+
+    if by_domain and our_domain and our_domain in by_domain:
         return by_domain[our_domain], "website", None
     return None, None, None
+
+
+def match_one(name, website, address, sbir, by_name, by_domain) -> tuple:
+    """SBIR: see match_company."""
+    return match_company(name, website, address, sbir, by_name, by_domain)
 
 
 def main() -> int:
@@ -521,8 +525,8 @@ def main() -> int:
         if k is None:
             for c in SBIR_COLUMNS:
                 added[c].append(None)
-            if how == "ambiguous":
-                added["sbir_match_by"][-1] = "ambiguous"
+            if how in ("ambiguous", "unconfirmed"):
+                added["sbir_match_by"][-1] = how
                 added["sbir_match_name"][-1] = note
                 # it may well have awards - we just cannot say whose
             else:
@@ -559,8 +563,8 @@ def main() -> int:
             if k is None:
                 for c in FORMD_COLUMNS:
                     fd_added[c].append(None)
-                if how == "ambiguous":
-                    fd_added["formd_match_by"][-1] = "ambiguous"
+                if how in ("ambiguous", "unconfirmed"):
+                    fd_added["formd_match_by"][-1] = how
                     fd_added["formd_match_name"][-1] = note
                 else:
                     fd_added["formd_raised"][-1] = "No"
@@ -648,14 +652,13 @@ def main() -> int:
         raise PermissionError(f"Could not write {out_path.name} - is it open "
                               "in Excel? Close it and re-run.") from e
 
-    matched = how_counts["name"] + how_counts["name+suffix"] + how_counts["website"]
+    matched = sum(how_counts[h] for h in ("name", "name+website", "name+address", "website"))
     s = combined
     print(f"\n  SBIR matched           {matched:>7,}")
-    print(f"    by name              {how_counts['name']:>7,}")
-    print(f"    by name+suffix       {how_counts['name+suffix']:>7,}   (websites differ, legal suffix agrees)")
-    print(f"    by website           {how_counts['website']:>7,}")
+    for h in ("name", "name+website", "name+address", "website"):
+        print(f"    by {h:<18}{how_counts[h]:>7,}")
     print(f"  ambiguous (by eye)     {how_counts['ambiguous']:>7,}")
-    print(f"  rejected (websites disagree / too generic) {how_counts['rejected']:>4,}")
+    print(f"  unconfirmed            {how_counts['unconfirmed']:>7,}   (similar name, website/ZIP did not confirm)")
     print(f"\n  sbir_awarded = Yes     {(s['sbir_awarded'] == 'Yes').sum():>7,}")
     print(f"  with an active award   {s['sbir_active_usdmm'].notna().sum():>7,}")
     print(f"  university current     {s['university_current'].notna().sum():>7,}")
@@ -664,9 +667,11 @@ def main() -> int:
     print(f"\n  employees from Capital IQ  {(src == 'Capital IQ').sum():>7,}")
     print(f"  employees filled from SBIR {src.str.startswith('SBIR').sum():>7,}")
     print(f"  employees still blank      {(src == '').sum():>7,}")
-    print(f"\n  Form D matched         {fd_counts['name']:>7,}")
+    print(f"\n  Form D matched         {fd_counts['name'] + fd_counts['name+address']:>7,}")
+    for h in ("name", "name+address"):
+        print(f"    by {h:<18}{fd_counts[h]:>7,}")
     print(f"  ambiguous (by eye)     {fd_counts['ambiguous']:>7,}")
-    print(f"  rejected (too generic) {fd_counts['rejected']:>7,}")
+    print(f"  unconfirmed            {fd_counts['unconfirmed']:>7,}   (similar name, ZIP did not confirm)")
     print(f"  formd_raised = Yes     {(combined['formd_raised'] == 'Yes').sum():>7,}")
     print(f"  with recent money      {combined['formd_recent_usdmm'].notna().sum():>7,}")
     xb = combined

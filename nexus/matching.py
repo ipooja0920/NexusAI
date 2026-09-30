@@ -58,6 +58,77 @@ def normalise_company_name(name: Optional[str]) -> str:
     return " ".join(parts).strip()
 
 
+# Legal forms only (not Holdings / Group / International / USA - those are
+# part of the name), each spelling mapped to one form so that Corp and
+# Corporation, or Co and Company, count as the same thing.
+_FORMS = {
+    "inc": "inc", "incorporated": "inc",
+    "corp": "corp", "corporation": "corp",
+    "co": "co", "company": "co",
+    "llc": "llc", "lc": "llc",
+    "ltd": "ltd", "limited": "ltd",
+    "lp": "lp", "llp": "llp", "plc": "plc", "pllc": "pllc",
+    "gmbh": "gmbh", "ag": "ag", "sa": "sa", "nv": "nv", "bv": "bv",
+}
+
+
+_SPELLINGS = {"incorporated", "corporation", "company", "limited"}
+
+
+def name_parts(name: Optional[str]) -> tuple:
+    """(name, legal forms) with case, spaces, punctuation and a leading
+    "The" ignored, and the legal form set aside:
+
+        "NeuroFlow, Inc."          -> ("neuroflow", {"inc"})
+        "Genzyme Corp."            -> ("genzyme", {"corp"})
+        "GENZYME CORPORATION"      -> ("genzyme", {"corp"})
+        "Abceutics"                -> ("abceutics", set())
+        "Curaleaf Holdings, Inc."  -> ("curaleaf holdings", {"inc"})
+
+    Bracketed text is dropped first, so Capital IQ's "(NasdaqGS:ORGO)"
+    ticker tag does not get in the way.
+    """
+    if not name:
+        return ("", frozenset())
+    t = _PAREN.sub(" ", str(name).lower()).replace("&", " and ")
+    # every Corporation / Company / Limited -> Corp / Co / Ltd, even
+    # mid-name: "Cannabist Company Holdings" = "Cannabist Co Holdings"
+    words = [_FORMS.get(w, w) if w in _SPELLINGS else w
+             for w in _NONALNUM.sub(" ", t).split()]
+    if words[:1] == ["the"]:
+        words = words[1:]
+    forms = set()
+    while words and words[-1] in _FORMS:
+        forms.add(_FORMS[words.pop()])
+    return (" ".join(words), frozenset(forms))
+
+
+def same_name(a: tuple, b: tuple) -> bool:
+    """The same name, as name_parts sees it. The legal form must not
+    contradict: Inc = Inc, and Inc = (none given), but Inc != LLC."""
+    (na, fa), (nb, fb) = a, b
+    return bool(na) and na == nb and (not fa or not fb or bool(fa & fb))
+
+
+# "Deer Park, New York    11729" - the city/state line of a Capital IQ
+# address block, ending in the ZIP code
+_ZIP_LINE = re.compile(r"^[^\n]*,[^\n,]*?\s(\d{5})(?:-\d{4})?\s*$", re.M)
+
+
+def zip_from_address(address: Optional[str]) -> Optional[str]:
+    """Five-digit US ZIP code from a Capital IQ address block, or None."""
+    if not address:
+        return None
+    m = _ZIP_LINE.search(str(address))
+    return m.group(1) if m else None
+
+
+def zip5(value) -> Optional[str]:
+    """A ZIP column value (SBIR, Form D) reduced to five digits, or None."""
+    s = "" if value is None else str(value).strip()[:5]
+    return s if re.fullmatch(r"\d{5}", s) else None
+
+
 # Legal forms, grouped so spelling variants compare equal.
 _LEGAL_FORMS = {
     "inc": "inc", "incorporated": "inc",
