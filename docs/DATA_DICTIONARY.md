@@ -247,6 +247,13 @@ Expanded-access programmes (not trials) are dropped.
 
 ## Things to remember
 
+- **One row per company.** Capital IQ lists some companies more than once
+  (another office or state entity). Rows with the same name, by the
+  matching rule, are kept once: the row with the most Capital IQ fields
+  filled in (on a tie, the first). 108 rows are left out, so the combined
+  file has 21,698 rows against 21,806 in the export. No column is added;
+  `data/review/combined_qa_review.xlsx` lists what was kept and left out.
+
 - **"Active" SBIR awards are judged on the day `combine_companies.py` runs**
   (contract end date on or after that day), not on the day `sbir_clean.csv`
   was built.

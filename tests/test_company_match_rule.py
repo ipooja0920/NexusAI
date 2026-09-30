@@ -199,3 +199,38 @@ class TestRule(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCapitalIQDuplicates(unittest.TestCase):
+    """combine_companies.drop_duplicate_companies: one row per company."""
+
+    def run_(self, rows):
+        import pandas as pd
+        from combine_companies import drop_duplicate_companies
+        df = pd.DataFrame(rows, columns=["Company Name", "Website", "Revenue"])
+        return drop_duplicate_companies(df, "Company Name")
+
+    def test_most_complete_row_kept(self):
+        kept, removed = self.run_([["Adgero Biopharmaceuticals Holdings, Inc.", "-", "-"],
+                                   ["Adgero Biopharmaceuticals Holdings, Inc.", "adgero.com", "-"]])
+        self.assertEqual(list(kept["Website"]), ["adgero.com"])
+        self.assertEqual(len(removed), 1)
+
+    def test_same_name_by_the_rule_is_one_company(self):
+        kept, _ = self.run_([["Alert Ambulance Service Inc", "-", "-"],
+                             ["Alert Ambulance Service Inc.", "-", "-"],
+                             ["Curaleaf Holdings, Inc. (TSX:CURA)", "curaleaf.com", "1268"],
+                             ["Curaleaf Holdings, Inc.", "-", "-"]])
+        self.assertEqual(list(kept["Company Name"]),
+                         ["Alert Ambulance Service Inc", "Curaleaf Holdings, Inc. (TSX:CURA)"])
+
+    def test_different_names_all_kept_in_order(self):
+        kept, removed = self.run_([["Casimir, LLC", "-", "-"], ["Casimir, Inc.", "-", "-"],
+                                   ["Curaleaf, Inc.", "-", "-"]])
+        self.assertEqual(len(kept), 3)
+        self.assertEqual(len(removed), 0)
+        self.assertEqual(list(kept["Company Name"]), ["Casimir, LLC", "Casimir, Inc.", "Curaleaf, Inc."])
+
+    def test_tie_keeps_the_first(self):
+        kept, _ = self.run_([["Acme Bio, Inc.", "a.com", "-"], ["ACME BIO INC", "b.com", "-"]])
+        self.assertEqual(list(kept["Website"]), ["a.com"])

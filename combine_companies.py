@@ -11,6 +11,9 @@ so the matching can be checked on its own, before anything is scored.
 
 companies_raw.xlsx is never modified. Every one of its columns is carried
 across unchanged, and the source columns are added on the right.
+A company Capital IQ lists more than once under the same name (another
+office, another state entity) is kept once - the row with the most fields
+filled in (drop_duplicate_companies). No column is added for it.
 
 Sources so far: SBIR, Form D, SEC XBRL, then ClinicalTrials.gov. OpenAlex
 joins here later.
@@ -193,6 +196,28 @@ CELL_LIMIT = 32_000
 # ----------------------------------------------------------------------
 # Capital IQ side
 # ----------------------------------------------------------------------
+
+def drop_duplicate_companies(df: pd.DataFrame, name_col: str) -> tuple:
+    """One row per company. Capital IQ lists some companies more than once
+    (another office, another state entity): rows whose names are the SAME
+    name (name_parts - capitals, punctuation, bracketed text and an added
+    country ignored, legal form equal) are one company. The row with the
+    most Capital IQ fields filled in is kept; on a tie, the first.
+
+    Returns (deduplicated frame, the removed rows)."""
+    def key(n):
+        base, forms = name_parts(n)
+        return f"{base}|{','.join(sorted(forms))}" if base else f"__row{id(n)}"
+    k = df[name_col].map(key)
+    filled = df.apply(lambda r: sum(str(v).strip() not in ("", "-", "nan")
+                                    for v in r), axis=1)
+    order = pd.DataFrame({"k": k, "filled": filled, "pos": range(len(df))})
+    keep = order.sort_values(["k", "filled", "pos"], ascending=[True, False, True]) \
+                .drop_duplicates("k")["pos"]
+    kept = df.iloc[sorted(keep)].reset_index(drop=True)
+    removed = df.drop(df.index[sorted(keep)])
+    return kept, removed
+
 
 def read_raw(cfg) -> tuple:
     """The Capital IQ export with EVERY column, unchanged, plus the names
@@ -676,7 +701,9 @@ def main() -> int:
         return 1
 
     raw, name_col, site_col, addr_col, emp_col = read_raw(cfg)
-    print(f"  Capital IQ companies   {len(raw):>7,}")
+    raw, dropped = drop_duplicate_companies(raw, name_col)
+    print(f"  Capital IQ companies   {len(raw):>7,}   ({len(dropped)} repeated rows of the "
+          "same company left out)")
     sbir = summarise_sbir(sbir_path)
     print(f"  SBIR companies         {len(sbir):>7,}")
     by_name, by_domain = build_indexes(sbir)
