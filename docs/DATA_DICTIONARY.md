@@ -36,6 +36,8 @@ Built by `combine_companies.py` from `data/input/companies_raw.xlsx` and
 | sbir_agencies | text | Which agencies funded it, and how often | Every award, active or ended, counted per agency, most first | `Department of Energy (4); National Science Foundation (1)` | 957 |
 | university_current | text | Research partners on awards still running | Distinct `ri_name` on active awards, `; `-separated | `Stevens Institute of Technology` | 8 |
 | university_past | text | Research partners on awards that have ended | Distinct `ri_name` on ended awards, **excluding** anything in `university_current` | `Boston University; MIT` | 229 |
+| sbir_award_titles | text | Titles of all its SBIR/STTR awards | Newest first, separated by ` \| `; a title repeated (Phase I then II) shown once | `Novel Antigen-Specific Immunomodulatory Tregitope-based Therapy … \| …` | 958 |
+| sbir_abstracts | text | Abstracts of all its awards — what each project is about | Newest first, separated by ` \|\| `; repeats shown once. If more than one Excel cell holds (~32,000 characters), the oldest are left out and counted as `(+N more)` | | 933 (56 cut short) |
 
 ### New fields — Form D
 
@@ -250,8 +252,9 @@ Expanded-access programmes (not trials) are dropped.
   download a new `award_data.csv`.
 - **SBIR employee counts can be old** — the year in `employees_source` shows
   how old.
-- **Award titles and abstracts** are only in `sbir_clean.csv` for now; how
-  they feed matching is still to be decided.
+- **Award titles and abstracts** are in the combined file (`sbir_award_titles`,
+  `sbir_abstracts`); abstracts are the applicants' own text and occasionally
+  mention researchers by name.
 - **SBIR money is not free cash.** It is tied to the funded project, so no
   SBIR dollar figure says whether a company can sponsor research now — which
   is why `sbir_total_usd` was dropped. Form D money *is* free cash.

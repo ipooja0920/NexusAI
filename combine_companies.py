@@ -104,6 +104,11 @@ Columns added:
   sbir_agencies        funding agencies with award counts, most first
   university_current   research partners on ACTIVE awards
   university_past      research partners on ENDED awards, minus current
+  sbir_award_titles    titles of all its awards, newest first, separated
+                       by " | " (a repeated title - Phase I then II - once)
+  sbir_abstracts       abstracts of all its awards, newest first, " || "
+                       between them; if more than one Excel cell holds,
+                       the oldest are counted as "(+N more)"
   employees_source     beside the employees column: "Capital IQ", or
                        "SBIR (year)" where Capital IQ had no figure and the
                        SBIR headcount from that year's award was used
@@ -126,11 +131,13 @@ Usage:
 """
 from __future__ import annotations
 
+import html
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
 import pandas as pd
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.utils import column_index_from_string
 
 from nexus.matching import (is_too_generic, name_parts, same_name,
@@ -142,6 +149,7 @@ SBIR_COLUMNS = [
     "sbir_match_name", "sbir_match_by", "sbir_awarded",
     "sbir_active_usdmm", "sbir_active_until",
     "sbir_agencies", "university_current", "university_past",
+    "sbir_award_titles", "sbir_abstracts",
 ]
 
 FORMD_COLUMNS = [
@@ -174,11 +182,12 @@ FORMD_READ = ["company", "cik", "state", "filing_number", "filing_date",
               "total_raised_to_date", "raised_since_last_filing",
               "industry_group", "is_business_combination", "zip"]
 
-# The per-award text is deliberately NOT read here. Titles and abstracts
-# stay in sbir_clean.csv until the matching step decides how to use them.
 SBIR_READ = ["company", "uei", "agency", "award_amount", "contract_end_date",
              "award_active_today", "ri_name", "company_website", "state",
-             "number_employees", "award_year", "zip"]
+             "number_employees", "award_year", "zip", "award_title", "abstract"]
+
+# Excel cannot hold more than 32,767 characters in one cell
+CELL_LIMIT = 32_000
 
 
 # ----------------------------------------------------------------------
@@ -207,6 +216,35 @@ def read_raw(cfg) -> tuple:
 # ----------------------------------------------------------------------
 # SBIR side: one summary per SBIR company
 # ----------------------------------------------------------------------
+
+def _fit(items: list, sep: str, limit: int = CELL_LIMIT):
+    """Join items (newest first) until the cell is full; the rest are
+    counted as "(+N more)". A company with 100+ awards has more abstract
+    text than one Excel cell can hold."""
+    out, used = [], 0
+    for i, x in enumerate(items):
+        if used + len(x) + len(sep) > limit:
+            out.append(f"(+{len(items) - i} more)")
+            break
+        out.append(x)
+        used += len(x) + len(sep)
+    return sep.join(out) or None
+
+
+def _distinct_text(values) -> list:
+    """Distinct texts, first spelling kept, ignoring case and spacing - a
+    Phase II award usually repeats its Phase I title."""
+    seen, out = set(), []
+    for v in values:
+        if isinstance(v, str) and v.strip():
+            # "&#039;" -> "'", and control characters Excel refuses to store
+            v = " ".join(ILLEGAL_CHARACTERS_RE.sub(" ", html.unescape(v)).split())
+            k = v.lower()
+            if k not in seen:
+                seen.add(k)
+                out.append(v)
+    return out
+
 
 def _distinct(values) -> list:
     seen, out = set(), []
@@ -255,6 +293,9 @@ def summarise_sbir(path: Path) -> dict:
             "sbir_agencies": "; ".join(f"{n} ({c})" for n, c in agencies.most_common()),
             "university_current": "; ".join(current),
             "university_past": "; ".join(past),
+            # every award's title and abstract, newest first, repeats once
+            "sbir_award_titles": _fit(_distinct_text(g["award_title"]), " | "),
+            "sbir_abstracts": _fit(_distinct_text(g["abstract"]), " || "),
             "employees": int(emp["number_employees"].iloc[0]) if len(emp) else None,
             "employees_year": int(emp["award_year"].iloc[0])
                               if len(emp) and pd.notna(emp["award_year"].iloc[0]) else None,
@@ -407,7 +448,9 @@ def summarise_ctgov(path: Path) -> dict:
             "ct_active_phase": f"Phase {int(phase)}" if pd.notna(phase) else None,
             "ct_last_start_year": int(start) if pd.notna(start) else None,
             "ct_conditions": conditions,
-            "ct_treatment_types": "; ".join(t for t, _ in types.most_common()) or None,
+            # most trials first, ties alphabetical - so a re-run gives the same text
+            "ct_treatment_types": "; ".join(t for t, _ in sorted(
+                types.items(), key=lambda kv: (-kv[1], kv[0]))) or None,
         }
     return out
 
