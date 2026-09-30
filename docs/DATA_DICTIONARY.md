@@ -15,11 +15,13 @@ Capital IQ is blank. The fields below are added on the right.
 Built by `combine_companies.py` from `data/input/companies_raw.xlsx` and
 `data/cache/sbir_clean.csv`. No AI, no scores.
 
-### Modified field
+### Modified fields
 
 | Field | Type | What changed | Example | Filled |
 |---|---|---|---|---|
 | Total Employees [Latest Annual] | number | Capital IQ value kept as is. Where Capital IQ is blank, the SBIR headcount is filled in. | `205` | 1,010 real counts (352 Capital IQ + 658 SBIR) |
+| Total Revenue [LTM] ($USDmm) | number ($ millions) | Capital IQ value kept as is. Where Capital IQ shows `-` (no figure), the SEC XBRL revenue is filled in, **however old** — an old real figure beats none. Capital IQ's `0` is a reported zero and is left alone. | `564.169` | 6,271 Capital IQ + 13 SEC |
+| revenue_source *(new, beside revenue)* | text | `Capital IQ`, or `SEC XBRL (year)` when filled from SEC — the year shows how old it is | `SEC XBRL (2023)` | |
 
 ### New fields
 
@@ -61,13 +63,13 @@ companies only — figures come from their own SEC filings.
 
 | Field | Type | Meaning | How it's derived | Example | Filled |
 |---|---|---|---|---|---|
-| xbrl_match_name | text | The company as SEC names it (latest name) | Copied from XBRL | `Amylyx Pharmaceuticals, Inc.` | 302 |
-| xbrl_match_by | text | How the match was made | `ticker` — Capital IQ ticker → SEC's ticker list → CIK; `formd_cik` — no usable ticker, but the Form D match's CIK files with SEC (raised privately, then listed; or an OTC / foreign ticker SEC doesn't list) | `ticker` | 271 ticker, 31 formd_cik |
-| xbrl_rd_expense_usdmm | number ($ millions) | R&D spend in the latest calendar year reported | Latest `rd_expense` year in `xbrl_clean.csv` | `90.404` | 270 |
+| xbrl_match_name | text | The company as SEC names it (latest name) | Copied from XBRL | `Amylyx Pharmaceuticals, Inc.` | 322 |
+| xbrl_match_by | text | How the match was made | `ticker` — Capital IQ ticker → SEC's ticker list → CIK; `formd_cik` — no usable ticker, but the Form D match's CIK files with SEC (raised privately, then listed; or an OTC / foreign ticker SEC doesn't list) | `ticker` | 289 ticker, 33 formd_cik |
+| xbrl_rd_expense_usdmm | number ($ millions) | R&D spend in the latest calendar year reported | Latest `rd_expense` year in `xbrl_clean.csv` | `90.404` | 293 |
 | xbrl_rd_year | year | That year | | `2025` | |
-| xbrl_revenue_usdmm | number ($ millions) | Revenue in the latest calendar year reported. A real 0 stays 0 | Latest `revenue` year | `0` (Amylyx 2025) | 206 |
+| xbrl_revenue_usdmm | number ($ millions) | Revenue in the latest calendar year reported. A real 0 stays 0 | Latest `revenue` year | `0` (Amylyx 2025) | 235 |
 | xbrl_revenue_year | year | That year | | `2025` | |
-| xbrl_cash_usdmm | number ($ millions) | Cash on the latest balance sheet | Latest quarter-end with cash or short-term investments | `180.2` | after fetch |
+| xbrl_cash_usdmm | number ($ millions) | Cash on the latest balance sheet | Latest quarter-end with cash or short-term investments | `180.2` | 302 |
 | xbrl_short_term_investments_usdmm | number ($ millions) | Securities it can sell within a year, **same balance sheet** as the cash. Blank = none reported that quarter | Same quarter-end as the cash | `95.0` | after fetch |
 | xbrl_cash_as_of | date | Date of that balance sheet | A quarter-end | `2026-06-30` | after fetch |
 

@@ -88,8 +88,14 @@ Columns added:
                        "SBIR (year)" where Capital IQ had no figure and the
                        SBIR headcount from that year's award was used
 
-The one change to a Capital IQ column: a BLANK employee count is filled
-from SBIR. A figure Capital IQ already has is never touched.
+Two Capital IQ columns can be filled, and ONLY where Capital IQ is blank -
+a figure Capital IQ already has is never touched:
+
+  employees  filled from SBIR; employees_source says "SBIR (year)"
+  revenue    filled from SEC XBRL (the company's own filing), even if that
+             figure is a few years old - an old real number beats none;
+             revenue_source says "SEC XBRL (year)". Capital IQ's "-" counts
+             as blank; its 0 does not - that is a reported zero.
 
 Input:  data/input/companies_raw.xlsx, data/cache/sbir_clean.csv
 Output: data/companies_combined.xlsx
@@ -548,6 +554,26 @@ def main() -> int:
     combined = pd.concat([raw, pd.DataFrame(added), pd.DataFrame(fd_added),
                           pd.DataFrame(xb_added)], axis=1)
 
+    # Revenue: Capital IQ first. Only where Capital IQ has NO figure is the
+    # SEC figure used - however old - and revenue_source says so.
+    rev_col = list(raw.columns)[column_index_from_string(
+        str(cfg.capitaliq["col_revenue"])) - 1]
+
+    def _no_revenue(v):
+        return v is None or (isinstance(v, float) and v != v) or \
+            str(v).strip() in ("", "-", "nan")
+    rev_source = []
+    for i in range(len(combined)):
+        if not _no_revenue(combined.at[i, rev_col]):
+            rev_source.append("Capital IQ")
+        elif xb_added["xbrl_revenue_usdmm"][i] is not None:
+            combined.at[i, rev_col] = str(xb_added["xbrl_revenue_usdmm"][i])
+            rev_source.append(f"SEC XBRL ({xb_added['xbrl_revenue_year'][i]})")
+        else:
+            rev_source.append(None)
+    combined.insert(combined.columns.get_loc(rev_col) + 1,
+                    "revenue_source", rev_source)
+
     # Employees: Capital IQ first. Only where Capital IQ has NO figure is
     # the SBIR headcount used, and employees_source says which it was, so
     # a filled-in number is never mistaken for Capital IQ's own.
@@ -606,6 +632,10 @@ def main() -> int:
     print(f"  with R&D expense       {xb['xbrl_rd_expense_usdmm'].notna().sum():>7,}")
     print(f"  with revenue           {xb['xbrl_revenue_usdmm'].notna().sum():>7,}")
     print(f"  with cash              {xb['xbrl_cash_usdmm'].notna().sum():>7,}")
+    rs = combined["revenue_source"].fillna("")
+    print(f"\n  revenue from Capital IQ    {(rs == 'Capital IQ').sum():>7,}")
+    print(f"  revenue filled from SEC    {rs.str.startswith('SEC').sum():>7,}")
+    print(f"  revenue still blank        {(rs == '').sum():>7,}")
     print(f"\n  written: {out_path}\n")
     return 0
 
