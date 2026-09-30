@@ -103,6 +103,18 @@ class TestPartners(unittest.TestCase):
                                                ("National Cancer Institute (NCI)", "NIH")])])
         self.assertEqual(df.iloc[0].partners, "Yale University; Hartford Hospital")
 
+    def test_individual_doctor_as_sponsor_not_kept(self):
+        """ClinicalTrials.gov files a sponsor-investigator as OTHER, like a
+        university. Only names with an institution word are kept."""
+        df = run([trial("NCT1", lead=("Jane Example", "OTHER"),
+                        collaborators=[("Acme Bio, Inc.", "INDUSTRY"),
+                                       ("UConn Health", "OTHER")])])
+        self.assertEqual(df.iloc[0].partners, "UConn Health")
+
+    def test_unnamed_connecticut_site(self):
+        df = run([trial("NCT1", sites=[(None, "Hartford", "Connecticut", "United States")])])
+        self.assertEqual(df.iloc[0].ct_sites, "unnamed site (Hartford)")
+
     def test_no_partner_is_blank(self):
         self.assertTrue(run([trial("NCT1")]).iloc[0].partners in ("", None))
 

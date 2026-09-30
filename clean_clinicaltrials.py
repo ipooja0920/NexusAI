@@ -26,7 +26,8 @@ Status -> is_active:
   not trials and are dropped.
 
 No person is named anywhere: investigators and contacts are never
-downloaded (see fetch_clinicaltrials.py).
+downloaded (see fetch_clinicaltrials.py), and a sponsor that may be an
+individual doctor is left out of partners (see INSTITUTION below).
 
 Input:  data/sources/clinicaltrials/page_*.json.gz  (python fetch_clinicaltrials.py)
 Output: data/cache/ctgov_clean.csv
@@ -38,6 +39,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -48,6 +50,23 @@ ACTIVE = {"RECRUITING", "NOT_YET_RECRUITING", "ACTIVE_NOT_RECRUITING",
 ENDED = {"COMPLETED", "TERMINATED", "SUSPENDED", "UNKNOWN", "WITHDRAWN"}
 PHASE = {"EARLY_PHASE1": "Early Phase 1", "PHASE1": "Phase 1", "PHASE2": "Phase 2",
          "PHASE3": "Phase 3", "PHASE4": "Phase 4", "NA": "Not applicable"}
+
+# A trial's non-company sponsor is sometimes an individual doctor rather than
+# an institution (ClinicalTrials.gov still files them as "OTHER"). People's
+# names must not end up in our files, and we cannot reliably tell a name
+# from an organisation - so a partner is kept only if its name contains an
+# institution word. Some real organisations without one are lost too
+# (about 10% of partner mentions); US universities and hospitals all pass.
+INSTITUTION = re.compile(
+    r"univ|college|hosp|h[oô]pita|medical|medicine|health|clinic|institut|school|"
+    r"cancer|center|centre|foundation|research|umc|nhs|trust|academ|scien|facult|"
+    r"society|council|ministry|association|consortium|network|group|alliance|agency|"
+    r"department|program|lab|charit|fondazione|fundaci|stichting|verein|e\.v\.|gmbh|"
+    r"llc|inc\b|ltd|kaiser|leuven|karolinska|oncolog|cardio|policlinic|polyclinic|"
+    r"sanit|salud|sant[eé]|klinik|inserm|cnrs|assistance publique|hospices|irccs|"
+    r"istituto|azienda|ospedale|pharmac|biobank|trials|study|studies|ziekenhuis|spital|"
+    r"sykehus|infirmary|polytechn|zentrum|organi[sz]ation|international|fund\b|union",
+    re.I)
 
 OUT_COLUMNS = [
     "company", "role", "nct_id", "title", "status", "is_active",
@@ -112,7 +131,7 @@ def study_rows(study: dict) -> list:
     companies = [(n, r) for n, cls, r in orgs if cls == "INDUSTRY"]
     if not companies:
         return []
-    partners = _join(n for n, cls, _ in orgs if cls == "OTHER")
+    partners = _join(n for n, cls, _ in orgs if cls == "OTHER" and INSTITUTION.search(n))
 
     label, number = phase_of(design.get("phases"))
     start = _date(status_m.get("startDateStruct"))
@@ -139,7 +158,7 @@ def study_rows(study: dict) -> list:
         "sites_total": len(locs),
         "sites_us": len(us),
         "sites_ct": len(ct),
-        "ct_sites": _join(f"{l.get('facility') or '?'} ({l.get('city') or '?'})" for l in ct),
+        "ct_sites": _join(f"{l.get('facility') or 'unnamed site'} ({l.get('city') or '?'})" for l in ct),
     }
     rows = []
     for name, role in companies:

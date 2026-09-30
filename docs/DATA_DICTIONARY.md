@@ -212,7 +212,7 @@ matching. No person is named: investigators and contacts are never downloaded.
 | enrollment | Number of participants |
 | conditions | Diseases studied, e.g. `Type 2 Diabetes` |
 | interventions | Treatments tested, e.g. drug or device names |
-| partners | Universities, hospitals and foundations on the trial, as written |
+| partners | Universities, hospitals and foundations on the trial, as written. Only names containing an institution word (University, Hospital, Health, Institute, ...) are kept, so a sponsor that is an individual doctor never appears; about 10% of partner mentions, mostly foreign organisations, are lost with them |
 | other_companies | Other companies on the same trial |
 | sites_total, sites_us, sites_ct | Number of trial sites: all, in the US, in Connecticut |
 | ct_sites | Connecticut sites, e.g. `UConn Health (Farmington)` |
