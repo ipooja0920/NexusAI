@@ -73,6 +73,7 @@ _FORMS = {
 
 
 _SPELLINGS = {"incorporated", "corporation", "company", "limited"}
+_TICKER = re.compile(r"\s*\([^()]*:[^()]*\)\s*")     # "(NasdaqGS:ORGO)"
 
 
 def name_parts(name: Optional[str]) -> tuple:
@@ -85,12 +86,13 @@ def name_parts(name: Optional[str]) -> tuple:
         "Abceutics"                -> ("abceutics", set())   (not = "Abceutics Inc.")
         "Curaleaf Holdings, Inc."  -> ("curaleaf holdings", {"inc"})
 
-    Bracketed text is dropped first, so Capital IQ's "(NasdaqGS:ORGO)"
-    ticker tag does not get in the way.
+    Only a bracketed TICKER tag is dropped - Capital IQ's "(NasdaqGS:ORGO)".
+    Any other bracketed text is part of the name: "Merck Sharp & Dohme
+    (I.A.) LLC" is not "Merck Sharp & Dohme LLC".
     """
     if not name:
         return ("", frozenset())
-    t = _PAREN.sub(" ", str(name).lower()).replace("&", " and ")
+    t = _TICKER.sub(" ", str(name).lower()).replace("&", " and ")
     # every Corporation / Company / Limited -> Corp / Co / Ltd, even
     # mid-name: "Cannabist Company Holdings" = "Cannabist Co Holdings"
     words = [_FORMS.get(w, w) if w in _SPELLINGS else w

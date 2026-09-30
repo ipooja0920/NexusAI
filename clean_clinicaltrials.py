@@ -72,7 +72,7 @@ OUT_COLUMNS = [
     "company", "role", "nct_id", "title", "status", "is_active",
     "study_type", "phase", "phase_number", "start_date", "start_year",
     "completion_date", "last_update", "enrollment",
-    "conditions", "interventions", "partners", "other_companies",
+    "conditions", "interventions", "intervention_types", "partners", "other_companies",
     "sites_total", "sites_us", "sites_ct", "ct_sites",
 ]
 
@@ -154,6 +154,9 @@ def study_rows(study: dict) -> list:
         "enrollment": (design.get("enrollmentInfo") or {}).get("count"),
         "conditions": _join(conds.get("conditions") or []),
         "interventions": _join(i.get("name") for i in arms.get("interventions") or []),
+        # DRUG, DEVICE, BIOLOGICAL, PROCEDURE, BEHAVIORAL, ... - the kind of
+        # treatment, which says more about fit with a faculty than a drug code
+        "intervention_types": _join(i.get("type") for i in arms.get("interventions") or []),
         "partners": partners,
         "sites_total": len(locs),
         "sites_us": len(us),

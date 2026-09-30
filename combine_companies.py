@@ -12,7 +12,25 @@ so the matching can be checked on its own, before anything is scored.
 companies_raw.xlsx is never modified. Every one of its columns is carried
 across unchanged, and the source columns are added on the right.
 
-Sources so far: SBIR, Form D, then SEC XBRL. OpenAlex joins here later.
+Sources so far: SBIR, Form D, SEC XBRL, then ClinicalTrials.gov. OpenAlex
+joins here later.
+
+CLINICALTRIALS.GOV columns (from data/cache/ctgov_clean.csv, built by
+clean_clinicaltrials.py). Withdrawn trials never ran and are left out of
+all of them; trials whose status is UNKNOWN count as ended.
+
+  ct_match_name         the company as ClinicalTrials.gov spells it
+  ct_match_by           name | ambiguous | unconfirmed. Trial records carry
+                        no sponsor website or address, so only a SAME name
+                        can match - a similar one stays "unconfirmed"
+  ct_university_current universities / hospitals on its RUNNING trials,
+                        most trials first, top 10 then "(+N more)"
+  ct_university_past    the same for ENDED trials, minus current
+  ct_trials_active      number of running trials (0 = none running)
+  ct_active_phase       highest phase among running trials, e.g. Phase 3
+  ct_last_start_year    year its most recent trial started (or will start)
+  ct_conditions         diseases studied, most trials first, top 10
+  ct_treatment_types    Drug / Device / Biological / ..., most trials first
 
 XBRL columns (from data/cache/xbrl_clean.csv, built by clean_xbrl.py) -
 public companies only, figures from their own SEC filings:
@@ -130,6 +148,19 @@ FORMD_COLUMNS = [
     "formd_match_name", "formd_match_by", "formd_raised",
     "formd_recent_usdmm", "formd_last_year", "formd_industry_group",
 ]
+
+CT_COLUMNS = [
+    "ct_match_name", "ct_match_by",
+    "ct_university_current", "ct_university_past",
+    "ct_trials_active", "ct_active_phase", "ct_last_start_year",
+    "ct_conditions", "ct_treatment_types",
+]
+
+CT_TYPES = {"DRUG": "Drug", "DEVICE": "Device", "BIOLOGICAL": "Biological",
+            "PROCEDURE": "Procedure", "BEHAVIORAL": "Behavioral",
+            "RADIATION": "Radiation", "DIETARY_SUPPLEMENT": "Dietary supplement",
+            "GENETIC": "Genetic", "COMBINATION_PRODUCT": "Combination product",
+            "DIAGNOSTIC_TEST": "Diagnostic test"}        # OTHER left out
 
 XBRL_COLUMNS = [
     "xbrl_match_name", "xbrl_match_by",
@@ -315,6 +346,71 @@ def match_formd(name, address, formd, by_name) -> tuple:
 # ----------------------------------------------------------------------
 # XBRL side: one summary per public company (by CIK)
 # ----------------------------------------------------------------------
+
+# ----------------------------------------------------------------------
+# ClinicalTrials.gov side: one summary per company name
+# ----------------------------------------------------------------------
+
+def _ranked(cells, exclude=(), top=10) -> tuple:
+    """"a; b" cells -> (text, full set). Most frequent first, the top `top`,
+    then "(+N more)" so a big pharma's hundreds of partners stay readable."""
+    counts = Counter()
+    for cell in cells:
+        if isinstance(cell, str):
+            counts.update({x.strip() for x in cell.split(";") if x.strip()})
+    for x in exclude:
+        counts.pop(x, None)
+    names = [n for n, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+    text = "; ".join(names[:top])
+    if len(names) > top:
+        text += f" (+{len(names) - top} more)"
+    return (text or None), set(names)
+
+
+def ct_key(name) -> str:
+    """Spellings that are the same name (name_parts) share one key, so
+    "Abiomed Inc." and "Abiomed, Inc" are one company, not two namesakes."""
+    n, forms = name_parts(name)
+    return f"{n}|{','.join(sorted(forms))}" if n else ""
+
+
+def summarise_ctgov(path: Path) -> dict:
+    """key -> summary. Withdrawn trials (never ran) are left out."""
+    c = pd.read_csv(path, low_memory=False,
+                    usecols=["company", "nct_id", "status", "is_active",
+                             "phase_number", "start_year", "conditions",
+                             "intervention_types", "partners"])
+    c = c[c["status"] != "WITHDRAWN"].copy()
+    c["is_active"] = c["is_active"].astype(str).str.lower() == "true"
+    c["key"] = c["company"].map(ct_key)
+    c = c[c["key"] != ""]
+    out = {}
+    for key, g in c.groupby("key", sort=False):
+        act = g[g["is_active"]]
+        current, cur_set = _ranked(act["partners"])
+        past, _ = _ranked(g.loc[~g["is_active"], "partners"], exclude=cur_set)
+        conditions, _ = _ranked(g["conditions"])
+        types = Counter(CT_TYPES[t.strip()] for cell in g["intervention_types"]
+                        if isinstance(cell, str) for t in set(cell.split(";"))
+                        if t.strip() in CT_TYPES)
+        phase = act["phase_number"].max()
+        start = g["start_year"].max()
+        name = g["company"].value_counts().index[0]      # commonest spelling
+        out[key] = {
+            "name": name,
+            "norm": normalise_company_name(name),
+            "exacts": {name_parts(name)},
+            "domains": set(), "zips": set(),             # none in trial records
+            "ct_university_current": current,
+            "ct_university_past": past,
+            "ct_trials_active": int(len(act)),
+            "ct_active_phase": f"Phase {int(phase)}" if pd.notna(phase) else None,
+            "ct_last_start_year": int(start) if pd.notna(start) else None,
+            "ct_conditions": conditions,
+            "ct_treatment_types": "; ".join(t for t, _ in types.most_common()) or None,
+        }
+    return out
+
 
 def _usdmm(v):
     """Dollars -> $ millions to 3 decimals, like Capital IQ's revenue."""
@@ -611,8 +707,36 @@ def main() -> int:
     else:
         print(f"  {xbrl_path.name} not found - run 'python clean_xbrl.py'; XBRL columns left blank")
 
+    # ---- ClinicalTrials.gov ----
+    ct_path = cfg.cache_dir / "ctgov_clean.csv"
+    ct_added = {c: [None] * len(raw) for c in CT_COLUMNS}
+    ct_counts = Counter()
+    if ct_path.exists():
+        ct = summarise_ctgov(ct_path)
+        print(f"  ClinicalTrials.gov companies {len(ct):>7,}")
+        ct_by_name = defaultdict(list)
+        for k, v in ct.items():
+            if v["norm"]:
+                ct_by_name[v["norm"]].append(k)
+        for i, row in raw.iterrows():
+            # no website or address in trial records: only a same name matches
+            k, how, note = match_company(row[name_col], None, None, ct, ct_by_name)
+            ct_counts[how] += 1
+            if k is None:
+                if how in ("ambiguous", "unconfirmed"):
+                    ct_added["ct_match_by"][i] = how
+                    ct_added["ct_match_name"][i] = note
+                continue
+            ct_added["ct_match_name"][i] = ct[k]["name"]
+            ct_added["ct_match_by"][i] = how
+            for c in CT_COLUMNS[2:]:
+                ct_added[c][i] = ct[k][c]
+    else:
+        print(f"  {ct_path.name} not found - run 'python clean_clinicaltrials.py'; "
+              "ClinicalTrials.gov columns left blank")
+
     combined = pd.concat([raw, pd.DataFrame(added), pd.DataFrame(fd_added),
-                          pd.DataFrame(xb_added)], axis=1)
+                          pd.DataFrame(xb_added), pd.DataFrame(ct_added)], axis=1)
 
     # Revenue: Capital IQ first. Only where Capital IQ has NO figure is the
     # SEC figure used - however old - and revenue_source says so.
@@ -683,6 +807,12 @@ def main() -> int:
     print(f"  with R&D expense       {xb['xbrl_rd_expense_usdmm'].notna().sum():>7,}")
     print(f"  with revenue           {sum(v is not None for v in xb_rev):>7,}")
     print(f"  with cash              {xb['xbrl_cash_usdmm'].notna().sum():>7,}")
+    print(f"\n  ClinicalTrials.gov matched  {ct_counts['name']:>7,}")
+    print(f"  ambiguous (by eye)          {ct_counts['ambiguous']:>7,}")
+    print(f"  unconfirmed                 {ct_counts['unconfirmed']:>7,}   (similar name only - no website/ZIP to confirm)")
+    print(f"  with a running trial        {(combined['ct_trials_active'].fillna(0) > 0).sum():>7,}")
+    print(f"  university current / past  {combined['ct_university_current'].notna().sum():>6,} / "
+          f"{combined['ct_university_past'].notna().sum():,}")
     rs = combined["revenue_source"].fillna("")
     print(f"\n  revenue from Capital IQ    {(rs == 'Capital IQ').sum():>7,}")
     print(f"  revenue filled from SEC    {rs.str.startswith('SEC').sum():>7,}")

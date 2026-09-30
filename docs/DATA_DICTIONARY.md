@@ -80,6 +80,24 @@ No name matching: a ticker or CIK belongs to exactly one company. Cash and
 short-term investments are the closest SEC figures to "money it could spend
 now" — like Form D, and unlike SBIR, it is free cash.
 
+### New fields — ClinicalTrials.gov
+
+Added after the XBRL block. From `data/cache/ctgov_clean.csv`. **Withdrawn**
+trials (never ran) are left out of every column; trials with status
+**UNKNOWN** count as ended.
+
+| Field | Type | Meaning | How it's derived | Example | Filled |
+|---|---|---|---|---|---|
+| ct_match_name | text | The company as ClinicalTrials.gov spells it (commonest spelling) | For unconfirmed / ambiguous rows, the candidate(s) | `Abiomed Inc.` | 1,646 |
+| ct_match_by | text | How the match was made | `name` only — trial records carry no sponsor website or address, so a similar name cannot be confirmed and stays `unconfirmed` | `name` | 898 name; 748 unconfirmed |
+| ct_university_current | text | Universities / hospitals on its **running** trials | Partners of running trials, most trials first, top 10 then `(+N more)` | `Yale University; UConn Health` | 146 |
+| ct_university_past | text | The same for **ended** trials | Partners of ended trials, minus any in current | `Duke University` | 332 |
+| ct_trials_active | number | Running trials | Count; 0 = matched but nothing running | `3` | 898 (435 above 0) |
+| ct_active_phase | text | Highest phase among running trials | `Phase 1` … `Phase 4`; blank if none running or no phases (e.g. device studies) | `Phase 3` | 311 |
+| ct_last_start_year | year | Year its most recent trial started (or is planned to) | Latest start year | `2025` | 896 |
+| ct_conditions | text | Diseases studied | Most trials first, top 10 then `(+N more)` | `Obesity; Type 2 Diabetes` | 898 |
+| ct_treatment_types | text | Kinds of treatment tested | Drug / Device / Biological / Procedure / …, most trials first ("Other" left out) | `Device; Drug` | 849 |
+
 ### Matching rules
 
 One rule for SBIR and Form D:
@@ -88,6 +106,8 @@ One rule for SBIR and Form D:
    leading "The" are ignored, and Corp = Corporation, Co = Company. The legal
    form must be the same: Inc = Inc, but Inc ≠ LLC and Inc ≠ (none given).
    *NeuroFlow, Inc. = NEUROFLOW INC; Genzyme Corp. = GENZYME CORPORATION.*
+   A bracketed ticker like `(NasdaqGS:ORGO)` is ignored; any other bracketed
+   text is part of the name (*Merck Sharp & Dohme (I.A.) LLC ≠ Merck Sharp & Dohme LLC*).
 2. **Similar name → matched only if confirmed.** Similar = the same only once
    Holdings / Group / International / USA are ignored too, or the legal forms
    differ or one is missing. *Casimir, LLC ~ Casimir, Inc.; Abceutics Inc. ~
@@ -212,6 +232,7 @@ matching. No person is named: investigators and contacts are never downloaded.
 | enrollment | Number of participants |
 | conditions | Diseases studied, e.g. `Type 2 Diabetes` |
 | interventions | Treatments tested, e.g. drug or device names |
+| intervention_types | Kind of treatment: DRUG, DEVICE, BIOLOGICAL, PROCEDURE, BEHAVIORAL, … |
 | partners | Universities, hospitals and foundations on the trial, as written. Only names containing an institution word (University, Hospital, Health, Institute, ...) are kept, so a sponsor that is an individual doctor never appears; about 10% of partner mentions, mostly foreign organisations, are lost with them |
 | other_companies | Other companies on the same trial |
 | sites_total, sites_us, sites_ct | Number of trial sites: all, in the US, in Connecticut |

@@ -154,6 +154,7 @@ class TestFields(unittest.TestCase):
                        interventions=("AB-101", "Placebo"))]).iloc[0]
         self.assertEqual(r.conditions, "Obesity; Type 2 Diabetes")      # repeat dropped
         self.assertEqual(r.interventions, "AB-101; Placebo")
+        self.assertEqual(r.intervention_types, "DRUG")
 
     def test_sites_counted_and_connecticut_listed(self):
         r = run([trial("NCT1", sites=[("UConn Health", "Farmington", "Connecticut", "United States"),

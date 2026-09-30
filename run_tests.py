@@ -28,6 +28,7 @@ SUITES = [
     ("XBRL cleaning", "tests.test_clean_xbrl"),
     ("XBRL fetch + combine", "tests.test_xbrl_pipeline"),
     ("ClinicalTrials.gov cleaning", "tests.test_clean_clinicaltrials"),
+    ("ClinicalTrials.gov combine", "tests.test_ctgov_combine"),
     ("End-to-end pipeline", "tests.test_pipeline"),
 ]
 
