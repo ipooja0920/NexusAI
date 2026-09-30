@@ -82,7 +82,7 @@ def name_parts(name: Optional[str]) -> tuple:
         "NeuroFlow, Inc."          -> ("neuroflow", {"inc"})
         "Genzyme Corp."            -> ("genzyme", {"corp"})
         "GENZYME CORPORATION"      -> ("genzyme", {"corp"})
-        "Abceutics"                -> ("abceutics", set())
+        "Abceutics"                -> ("abceutics", set())   (not = "Abceutics Inc.")
         "Curaleaf Holdings, Inc."  -> ("curaleaf holdings", {"inc"})
 
     Bracketed text is dropped first, so Capital IQ's "(NasdaqGS:ORGO)"
@@ -104,10 +104,11 @@ def name_parts(name: Optional[str]) -> tuple:
 
 
 def same_name(a: tuple, b: tuple) -> bool:
-    """The same name, as name_parts sees it. The legal form must not
-    contradict: Inc = Inc, and Inc = (none given), but Inc != LLC."""
+    """The same name, as name_parts sees it, INCLUDING the legal form:
+    Inc = Inc and Corp = Corporation, but Inc != LLC, and "Abceutics Inc."
+    != "Abceutics" - a missing form might be a different company."""
     (na, fa), (nb, fb) = a, b
-    return bool(na) and na == nb and (not fa or not fb or bool(fa & fb))
+    return bool(na) and na == nb and fa == fb
 
 
 # "Deer Park, New York    11729" - the city/state line of a Capital IQ

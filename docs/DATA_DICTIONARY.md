@@ -19,7 +19,7 @@ Built by `combine_companies.py` from `data/input/companies_raw.xlsx` and
 
 | Field | Type | What changed | Example | Filled |
 |---|---|---|---|---|
-| Total Employees [Latest Annual] | number | Capital IQ value kept as is. Where Capital IQ is blank, the SBIR headcount is filled in. | `205` | 990 real counts (352 Capital IQ + 638 SBIR) |
+| Total Employees [Latest Annual] | number | Capital IQ value kept as is. Where Capital IQ is blank, the SBIR headcount is filled in. | `205` | 972 real counts (352 Capital IQ + 620 SBIR) |
 | Total Revenue [LTM] ($USDmm) | number ($ millions) | Capital IQ value kept as is. Where Capital IQ shows `-` (no figure), the SEC XBRL revenue is filled in, **however old** — an old real figure beats none. Capital IQ's `0` is a reported zero and is left alone. | `564.169` | 6,271 Capital IQ + 9 SEC |
 | revenue_source *(new, beside revenue)* | text | `Capital IQ`, or `SEC XBRL (year)` when filled from SEC — the year shows how old it is | `SEC XBRL (2023)` | |
 
@@ -27,15 +27,15 @@ Built by `combine_companies.py` from `data/input/companies_raw.xlsx` and
 
 | Field | Type | Meaning | How it's derived | Example | Filled |
 |---|---|---|---|---|---|
-| employees_source | text | Where the employee count came from | `Capital IQ` if Capital IQ had a figure; `SBIR (year)` if filled from the company's most recent SBIR award that reports a headcount; blank if neither | `SBIR (2023)` | 990 |
-| sbir_match_name | text | The SBIR company attached to this row, as SBIR spells it | Copied from SBIR. For an ambiguous match, lists the candidates | `AGILIX INC` | 1,089 (994 matched + 95 unconfirmed candidates) |
-| sbir_match_by | text | How the match was made (see Matching rules) | `name`, `name+website`, `name+address`, `website`; or `ambiguous` / `unconfirmed` — nothing attached, candidate shown in sbir_match_name | `name` | 994 matched (916 name, 29 name+website, 29 name+address, 20 website); 95 unconfirmed |
-| sbir_awarded | Yes / No | Has the company ever had an SBIR or STTR award | `Yes` if matched; `No` if not; blank for the ambiguous row | `Yes` | 994 Yes |
-| sbir_active_usdmm | number ($ millions) | Money on awards still running | Sum of `award_amount` over awards with `award_active_today = True`, in $ millions to 3 decimals (like Capital IQ revenue). Full award value — not what is left unspent, and **not free cash** | `0.551` | 74 |
-| sbir_active_until | date | When the company's SBIR money runs out | Latest `contract_end_date` among active awards | `2027-07-31` | 74 |
-| sbir_agencies | text | Which agencies funded it, and how often | Every award, active or ended, counted per agency, most first | `Department of Energy (4); National Science Foundation (1)` | 994 |
+| employees_source | text | Where the employee count came from | `Capital IQ` if Capital IQ had a figure; `SBIR (year)` if filled from the company's most recent SBIR award that reports a headcount; blank if neither | `SBIR (2023)` | 972 |
+| sbir_match_name | text | The SBIR company attached to this row, as SBIR spells it | Copied from SBIR. For an ambiguous match, lists the candidates | `AGILIX INC` | 1,089 (957 matched + 132 unconfirmed candidates) |
+| sbir_match_by | text | How the match was made (see Matching rules) | `name`, `name+website`, `name+address`, `website`; or `ambiguous` / `unconfirmed` — nothing attached, candidate shown in sbir_match_name | `name` | 957 matched (844 name, 40 name+website, 53 name+address, 20 website); 132 unconfirmed |
+| sbir_awarded | Yes / No | Has the company ever had an SBIR or STTR award | `Yes` if matched; `No` if not; blank for the ambiguous row | `Yes` | 957 Yes |
+| sbir_active_usdmm | number ($ millions) | Money on awards still running | Sum of `award_amount` over awards with `award_active_today = True`, in $ millions to 3 decimals (like Capital IQ revenue). Full award value — not what is left unspent, and **not free cash** | `0.551` | 73 |
+| sbir_active_until | date | When the company's SBIR money runs out | Latest `contract_end_date` among active awards | `2027-07-31` | 73 |
+| sbir_agencies | text | Which agencies funded it, and how often | Every award, active or ended, counted per agency, most first | `Department of Energy (4); National Science Foundation (1)` | 957 |
 | university_current | text | Research partners on awards still running | Distinct `ri_name` on active awards, `; `-separated | `Stevens Institute of Technology` | 8 |
-| university_past | text | Research partners on awards that have ended | Distinct `ri_name` on ended awards, **excluding** anything in `university_current` | `Boston University; MIT` | 234 |
+| university_past | text | Research partners on awards that have ended | Distinct `ri_name` on ended awards, **excluding** anything in `university_current` | `Boston University; MIT` | 229 |
 
 ### New fields — Form D
 
@@ -43,9 +43,9 @@ Added after the SBIR block. From `data/cache/formd_clean.csv`.
 
 | Field | Type | Meaning | How it's derived | Example | Filled |
 |---|---|---|---|---|---|
-| formd_match_name | text | The Form D company attached, as SEC spells it (latest name) | Copied from Form D. For an ambiguous match, lists the candidates | `REVBIO, INC.` | 1,076 (1,000 matched + 76 unconfirmed / ambiguous candidates) |
-| formd_match_by | text | How the match was made (see Matching rules) | `name`, `name+address`; or `ambiguous` / `unconfirmed` — nothing attached | `name` | 1,000 matched (986 name, 14 name+address); 75 unconfirmed, 1 ambiguous |
-| formd_raised | Yes / No | Has raised private money in the filings we hold (2023 onward) | `Yes` if any real filing (not a merger, not "yet to occur") reports money raised | `Yes` | 950 Yes |
+| formd_match_name | text | The Form D company attached, as SEC spells it (latest name) | Copied from Form D. For an ambiguous match, lists the candidates | `REVBIO, INC.` | 1,076 (995 matched + 81 unconfirmed / ambiguous candidates) |
+| formd_match_by | text | How the match was made (see Matching rules) | `name`, `name+address`; or `ambiguous` / `unconfirmed` — nothing attached | `name` | 995 matched (980 name, 15 name+address); 80 unconfirmed, 1 ambiguous |
+| formd_raised | Yes / No | Has raised private money in the filings we hold (2023 onward) | `Yes` if any real filing (not a merger, not "yet to occur") reports money raised | `Yes` | 946 Yes |
 | formd_recent_usdmm | number ($ millions) | Money raised since `combine.formd_recent_from` in `config.yaml` (now 2025-01-01) | Sum of `raised_since_last_filing` over: updates filed on/after the date, and first filings whose **first sale** is on/after it. Mergers and "yet to occur" never count. **Free cash** — unlike SBIR, investors' money can be spent on sponsored research | `3.115` | 422 |
 | formd_last_year | year | Last year the company raised new money | Year of the latest filing with `raised_since_last_filing` > 0 | `2025` | |
 | formd_industry_group | text | Industry the company gave SEC | Every value across its filings, most recent first | `Biotechnology` | |
@@ -86,11 +86,12 @@ One rule for SBIR and Form D:
 
 1. **Same name → matched** (`name`). Same once case, spaces, punctuation and a
    leading "The" are ignored, and Corp = Corporation, Co = Company. The legal
-   form must not contradict: Inc = Inc, Inc = (none given), but Inc ≠ LLC.
+   form must be the same: Inc = Inc, but Inc ≠ LLC and Inc ≠ (none given).
    *NeuroFlow, Inc. = NEUROFLOW INC; Genzyme Corp. = GENZYME CORPORATION.*
 2. **Similar name → matched only if confirmed.** Similar = the same only once
    Holdings / Group / International / USA are ignored too, or the legal forms
-   differ. *Casimir, LLC ~ Casimir, Inc.; Curaleaf, Inc. ~ Curaleaf Holdings, Inc.*
+   differ or one is missing. *Casimir, LLC ~ Casimir, Inc.; Abceutics Inc. ~
+   Abceutics; Curaleaf, Inc. ~ Curaleaf Holdings, Inc.*
    - both have a website → the websites must match (`name+website`); if they
      differ it is a different company
    - otherwise → the ZIP codes must match (`name+address`)

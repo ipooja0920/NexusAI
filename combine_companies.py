@@ -57,10 +57,11 @@ MATCHING - one rule for SBIR and Form D (match_company below):
 
   1. SAME NAME -> matched ("name"). Same once case, spaces, punctuation and
      a leading "The" are ignored, and Corp = Corporation, Co = Company. The
-     legal form must not contradict: Inc = Inc, Inc = (none), Inc != LLC.
+     legal form must be the same: Inc = Inc, but Inc != LLC and
+     Inc != (none given).
   2. SIMILAR NAME -> matched only if confirmed. Similar = the same once
      Holdings / Group / International / USA are also ignored, or the legal
-     forms differ ("Casimir, LLC" ~ "Casimir, Inc.").
+     forms differ or one is missing ("Casimir, LLC" ~ "Casimir, Inc.").
        * both have a website -> the websites must match   ("name+website")
        * otherwise           -> the ZIP codes must match   ("name+address")
      Not confirmed -> nothing attached, marked "unconfirmed" with the
@@ -442,12 +443,13 @@ def match_company(name, website, address, data, by_name, by_domain=None) -> tupl
     """(key or None, how, note). The one matching rule, for every source:
 
       1. SAME NAME - identical once case, spaces, punctuation and a
-         leading "The" are ignored, with the legal form not contradicting
+         leading "The" are ignored, with the SAME legal form
          ("NeuroFlow, Inc." = "NEUROFLOW INC"; "Genzyme Corp." =
-         "Genzyme Corporation"; "Abceutics Inc." = "Abceutics")  -> "name"
+         "Genzyme Corporation")                                 -> "name"
       2. SIMILAR NAME - only the same once Holdings / Group / International
-         / USA are ignored too, or the legal forms differ ("Casimir, LLC" ~
-         "Casimir, Inc."; "Curaleaf, Inc." ~ "Curaleaf Holdings, Inc.").
+         / USA are ignored too, or the legal forms differ or one is missing
+         ("Casimir, LLC" ~ "Casimir, Inc."; "Abceutics Inc." ~ "Abceutics";
+         "Curaleaf, Inc." ~ "Curaleaf Holdings, Inc.").
          Only a match if confirmed:
            * both have a website  -> the websites must match -> "name+website"
              (and if they differ, it is NOT the same company)

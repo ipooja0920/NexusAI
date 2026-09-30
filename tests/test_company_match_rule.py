@@ -36,11 +36,13 @@ class TestSameName(unittest.TestCase):
         self.assertTrue(same("THE BOEING COMPANY", "BOEING CO"))
         self.assertTrue(same("The Cannabist Company Holdings Inc.", "Cannabist Co Holdings Inc."))
 
-    def test_missing_legal_form_does_not_contradict(self):
-        self.assertTrue(same("Abceutics Inc.", "Abceutics"))
+    def test_missing_legal_form_is_not_the_same(self):
+        """Could be a different company - must be confirmed."""
+        self.assertFalse(same("Abceutics Inc.", "Abceutics"))
+        self.assertTrue(same("ABCEUTICS", "Abceutics"))
 
     def test_ampersand_and_ticker_tag(self):
-        self.assertTrue(same("Cambridge Research & Instrumentation, Inc.",
+        self.assertTrue(same("Cambridge Research & Instrumentation",
                              "CAMBRIDGE RESEARCH AND INSTRUMENTATION"))
         self.assertTrue(same("Organogenesis Holdings Inc. (NasdaqCM:ORGO)",
                              "ORGANOGENESIS HOLDINGS INC"))
@@ -140,12 +142,20 @@ class TestRule(unittest.TestCase):
 
     # 3. short names
     def test_short_same_name_needs_confirmation(self):
-        """Meta, Inc. on Long Island is not the SBIR 'Meta' in San Jose."""
+        """Meta, Inc. on Long Island is not the SBIR 'Meta, Inc.' in San Jose."""
         self.assertEqual(self.match("Meta, Inc.", None, "11530",
-                                    ("k", "Meta", [], ["95125"])),
+                                    ("k", "META INC", [], ["95125"])),
                          (None, "unconfirmed"))
         self.assertEqual(self.match("Meta, Inc.", None, "95125",
-                                    ("k", "Meta", [], ["95125"])),
+                                    ("k", "META INC", [], ["95125"])),
+                         ("k", "name+address"))
+
+    def test_missing_legal_form_needs_confirmation(self):
+        self.assertEqual(self.match("Abceutics Inc.", None, "02139",
+                                    ("k", "Abceutics", [], ["94107"])),
+                         (None, "unconfirmed"))
+        self.assertEqual(self.match("Abceutics Inc.", None, "02139",
+                                    ("k", "Abceutics", [], ["02139"])),
                          ("k", "name+address"))
 
     # namesakes and website-only
