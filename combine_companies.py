@@ -368,12 +368,14 @@ def summarise_xbrl(path: Path) -> dict:
             # everything it could draw on that day: cash + short-term
             # investments (a missing one counts as none). Added before
             # rounding, so it is exact rather than a sum of rounded parts.
-            # If the company's own total for that day is LARGER, it holds
-            # investments under a label we do not read - use its total.
+            # If the company's own total for that day is clearly LARGER
+            # (by more than 1%), it holds investments under a label we do
+            # not read - use its total. The 1% ignores companies that simply
+            # round their total ($110.2M against our exact $110.197M).
             own = day.loc[day["concept"] == "cash_and_short_term_investments",
                           "value_usd"]
             parts = (day["concept"] != "cash_and_short_term_investments").any()
-            if len(own) and (not parts or float(own.iloc[0]) > total):
+            if len(own) and (not parts or float(own.iloc[0]) > total * 1.01):
                 total, source = float(own.iloc[0]), "company's own total"
             else:
                 source = "cash + short-term"

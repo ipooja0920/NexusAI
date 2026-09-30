@@ -69,7 +69,7 @@ companies only — figures come from their own SEC filings.
 | xbrl_rd_year | year | That year | | `2025` | |
 | xbrl_cash_usdmm | number ($ millions) | Cash on the latest balance sheet | Latest quarter-end with cash or short-term investments | `23.37` (Corbus) | 302 |
 | xbrl_short_term_investments_usdmm | number ($ millions) | Securities it can sell within a year, **same balance sheet** as the cash. Blank = none reported that quarter | Same quarter-end as the cash | `94.571` (Corbus) | |
-| xbrl_cash_total_usdmm | number ($ millions) | Everything it could draw on that day | Cash + short-term investments on the same balance sheet (a missing one counts as 0) — or the company's **own reported total** for that day if that is larger, which catches investments filed under a label we don't read | `117.941` (Corbus, 30 Jun 2026) | 302 |
+| xbrl_cash_total_usdmm | number ($ millions) | Everything it could draw on that day | Cash + short-term investments on the same balance sheet (a missing one counts as 0) — or the company's **own reported total** for that day if that is more than 1% larger, which catches investments filed under a label we don't read (and sometimes longer-dated investments it also counts as available) | `117.941` (Corbus, 30 Jun 2026) | 302 |
 | xbrl_cash_total_from | text | Where the total came from | `cash + short-term`, or `company's own total` | `cash + short-term` | 302 |
 | xbrl_cash_as_of | date | Date of that balance sheet | A quarter-end | `2026-06-30` (277 of 302) | 302 |
 
