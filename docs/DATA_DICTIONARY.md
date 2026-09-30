@@ -54,6 +54,27 @@ Filings are grouped by **CIK** (SEC's company ID), so a company that renamed
 itself keeps all its raises — Liberation Labs Holdings → Liberation
 Bioindustries.
 
+### New fields — SEC XBRL
+
+Added after the Form D block. From `data/cache/xbrl_clean.csv`. Public
+companies only — figures come from their own SEC filings.
+
+| Field | Type | Meaning | How it's derived | Example | Filled |
+|---|---|---|---|---|---|
+| xbrl_match_name | text | The company as SEC names it (latest name) | Copied from XBRL | `Amylyx Pharmaceuticals, Inc.` | 302 |
+| xbrl_match_by | text | How the match was made | `ticker` — Capital IQ ticker → SEC's ticker list → CIK; `formd_cik` — no usable ticker, but the Form D match's CIK files with SEC (raised privately, then listed; or an OTC / foreign ticker SEC doesn't list) | `ticker` | 271 ticker, 31 formd_cik |
+| xbrl_rd_expense_usdmm | number ($ millions) | R&D spend in the latest calendar year reported | Latest `rd_expense` year in `xbrl_clean.csv` | `90.404` | 270 |
+| xbrl_rd_year | year | That year | | `2025` | |
+| xbrl_revenue_usdmm | number ($ millions) | Revenue in the latest calendar year reported. A real 0 stays 0 | Latest `revenue` year | `0` (Amylyx 2025) | 206 |
+| xbrl_revenue_year | year | That year | | `2025` | |
+| xbrl_cash_usdmm | number ($ millions) | Cash on the latest balance sheet | Latest quarter-end with cash or short-term investments | `180.2` | after fetch |
+| xbrl_short_term_investments_usdmm | number ($ millions) | Securities it can sell within a year, **same balance sheet** as the cash. Blank = none reported that quarter | Same quarter-end as the cash | `95.0` | after fetch |
+| xbrl_cash_as_of | date | Date of that balance sheet | A quarter-end | `2026-06-30` | after fetch |
+
+No name matching: a ticker or CIK belongs to exactly one company. Cash and
+short-term investments are the closest SEC figures to "money it could spend
+now" — like Form D, and unlike SBIR, it is free cash.
+
 ### Matching rules
 
 - **Name first, website second.** Names are compared after normalising
@@ -132,6 +153,26 @@ reports the **total raised so far**, not new money.
 
 ---
 
+## 4. `data/cache/xbrl_clean.csv`
+
+One row per public company per concept per period. Built by
+`clean_xbrl.py` from the frames that `fetch_sec_xbrl.py` downloads into
+`data/sources/xbrl/`. No matching.
+
+| Field | Meaning |
+|---|---|
+| company, cik, ticker | Who reported it. Ticker is the common-stock one (GOOG, not GOOGN) |
+| concept | `rd_expense`, `revenue` (a whole year) or `cash`, `short_term_investments` (one day) |
+| period | `CY2025` = calendar year 2025; `CY2026Q2I` = as at 30 June 2026 (I = instant) |
+| period_type | `year` or `instant` |
+| period_start, period_end | Dates the figure covers; instant figures have only an end |
+| value_usd | The figure, in dollars |
+| tag | Which SEC tag it came from. Each concept has several alternatives; the first with a non-zero figure is used, never a sum |
+| accession | The filing it came from |
+| location | State / country SEC holds for the company |
+
+---
+
 ## Things to remember
 
 - **"Active" depends on the day the file is built.** Re-run
@@ -145,4 +186,9 @@ reports the **total raised so far**, not new money.
   SBIR dollar figure says whether a company can sponsor research now — which
   is why `sbir_total_usd` was dropped. Form D money *is* free cash.
 - **Rebuild order after new downloads:** `python clean_sbir.py`,
-  `python clean_formd.py`, then `python combine_companies.py`.
+  `python clean_formd.py`, `python clean_xbrl.py`, then
+  `python combine_companies.py`.
+- **XBRL cash needs a fetch from your Mac's Terminal** (SEC can't be reached
+  from Claude's environments): `python fetch_sec_xbrl.py`. Frames for a
+  recent quarter keep filling for ~120 days; the fetch re-downloads those
+  automatically on the next run.

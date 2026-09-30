@@ -12,7 +12,29 @@ so the matching can be checked on its own, before anything is scored.
 companies_raw.xlsx is never modified. Every one of its columns is carried
 across unchanged, and the source columns are added on the right.
 
-Sources so far: SBIR, then Form D. XBRL and OpenAlex join here later.
+Sources so far: SBIR, Form D, then SEC XBRL. OpenAlex joins here later.
+
+XBRL columns (from data/cache/xbrl_clean.csv, built by clean_xbrl.py) -
+public companies only, figures from their own SEC filings:
+
+  xbrl_match_name       the company as SEC names it
+  xbrl_match_by         ticker     - Capital IQ ticker -> SEC's ticker list
+                                     -> CIK (SEC's company ID)
+                        formd_cik  - no usable ticker, but the Form D match
+                                     carries a CIK that files with SEC
+                                     (companies that raised privately, then
+                                     listed)
+  xbrl_rd_expense_usdmm R&D spend in the latest calendar year, $ millions
+  xbrl_rd_year          that year
+  xbrl_revenue_usdmm    revenue in the latest calendar year, $ millions
+  xbrl_revenue_year     that year
+  xbrl_cash_usdmm       cash on the latest balance sheet, $ millions
+  xbrl_short_term_investments_usdmm
+                        securities it can sell within a year, same balance
+                        sheet, $ millions. Blank = none reported.
+  xbrl_cash_as_of       the date of that balance sheet (a quarter-end)
+
+No name matching at all: a ticker or a CIK belongs to exactly one company.
 
 FORM D columns (from data/cache/formd_clean.csv, built by clean_formd.py):
 
@@ -99,6 +121,13 @@ SBIR_COLUMNS = [
 FORMD_COLUMNS = [
     "formd_match_name", "formd_match_by", "formd_raised",
     "formd_recent_usdmm", "formd_last_year", "formd_industry_group",
+]
+
+XBRL_COLUMNS = [
+    "xbrl_match_name", "xbrl_match_by",
+    "xbrl_rd_expense_usdmm", "xbrl_rd_year",
+    "xbrl_revenue_usdmm", "xbrl_revenue_year",
+    "xbrl_cash_usdmm", "xbrl_short_term_investments_usdmm", "xbrl_cash_as_of",
 ]
 
 FORMD_READ = ["company", "cik", "state", "filing_number", "filing_date",
@@ -284,6 +313,86 @@ def match_formd(name, address, formd, by_name) -> tuple:
 
 
 # ----------------------------------------------------------------------
+# XBRL side: one summary per public company (by CIK)
+# ----------------------------------------------------------------------
+
+def _usdmm(v):
+    """Dollars -> $ millions to 3 decimals, like Capital IQ's revenue."""
+    return None if v is None or v != v else round(float(v) / 1e6, 3)
+
+
+def summarise_xbrl(path: Path) -> dict:
+    """cik -> latest figures.
+
+    R&D and revenue: the latest calendar year the company reported.
+    Cash and short-term investments: the latest balance sheet, and BOTH
+    from that same date - mixing a June cash figure with a March
+    investments figure would describe a moment that never existed.
+    """
+    x = pd.read_csv(path, usecols=["company", "cik", "concept", "period",
+                                   "period_type", "period_end", "value_usd"])
+    x = x.sort_values("period_end")
+    out = {}
+    for cik, g in x.groupby("cik", sort=False):
+        s = {"name": g["company"].iloc[-1]}
+        for concept, col in (("rd_expense", "xbrl_rd"), ("revenue", "xbrl_revenue")):
+            y = g[(g["concept"] == concept) & (g["period_type"] == "year")]
+            if len(y):
+                last = y.iloc[-1]
+                s[f"{col}_usdmm" if concept == "revenue" else "xbrl_rd_expense_usdmm"] = _usdmm(last["value_usd"])
+                s[f"{col}_year"] = int(str(last["period"])[2:6])
+        bs = g[g["concept"].isin(["cash", "short_term_investments"])
+               & (g["period_type"] == "instant")]
+        if len(bs):
+            latest = bs["period_end"].max()
+            day = bs[bs["period_end"] == latest]
+            for concept, col in (("cash", "xbrl_cash_usdmm"),
+                                 ("short_term_investments",
+                                  "xbrl_short_term_investments_usdmm")):
+                v = day.loc[day["concept"] == concept, "value_usd"]
+                s[col] = _usdmm(v.iloc[0]) if len(v) else None
+            s["xbrl_cash_as_of"] = latest
+        out[int(cik)] = s
+    return out
+
+
+def load_ticker_ciks(path: Path) -> dict:
+    """ticker -> CIK from SEC's list. Every ticker a company has (common,
+    preferred, warrants) points to it, so any of them resolves."""
+    if not path.exists():
+        return {}
+    out = {}
+    for row in pd.read_json(path, orient="index").itertuples():
+        out[str(row.ticker).upper()] = int(row.cik_str)
+    return out
+
+
+def ticker_of(value):
+    """Capital IQ writes 'NasdaqCM:ACET' or '-'. Return the bare symbol."""
+    s = "" if value is None or value != value else str(value).strip()
+    if not s or s == "-" or s.lower() == "nan":
+        return None
+    return (s.split(":")[-1] if ":" in s else s).strip().upper() or None
+
+
+def match_xbrl(ticker, formd_cik, xbrl, ticker_ciks) -> tuple:
+    """(cik or None, how). Ticker first; the Form D CIK only when the
+    ticker gives nothing."""
+    t = ticker_of(ticker)
+    cik = ticker_ciks.get(t) if t else None
+    if cik in xbrl:
+        return cik, "ticker"
+    if formd_cik is not None:
+        try:
+            fc = int(formd_cik)
+        except (TypeError, ValueError):
+            fc = None
+        if fc in xbrl:
+            return fc, "formd_cik"
+    return None, None
+
+
+# ----------------------------------------------------------------------
 # The join
 # ----------------------------------------------------------------------
 
@@ -379,6 +488,7 @@ def main() -> int:
     formd_path = cfg.cache_dir / "formd_clean.csv"
     fd_added = {c: [] for c in FORMD_COLUMNS}
     fd_counts = Counter()
+    fd_ciks = [None] * len(raw)
     if formd_path.exists():
         recent_from = (cfg.raw.get("combine") or {}).get("formd_recent_from",
                                                           "2025-01-01")
@@ -388,9 +498,10 @@ def main() -> int:
         for k, v in formd.items():
             if v["norm"]:
                 fd_by_name[v["norm"]].append(k)
-        for _, row in raw.iterrows():
+        for i, row in raw.iterrows():
             k, how, note = match_formd(row[name_col], row[addr_col], formd, fd_by_name)
             fd_counts[how] += 1
+            fd_ciks[i] = k
             if k is None:
                 for c in FORMD_COLUMNS:
                     fd_added[c].append(None)
@@ -409,7 +520,33 @@ def main() -> int:
         print(f"  {formd_path.name} not found - run 'python clean_formd.py'; Form D columns left blank")
         fd_added = {c: [None] * len(raw) for c in FORMD_COLUMNS}
 
-    combined = pd.concat([raw, pd.DataFrame(added), pd.DataFrame(fd_added)], axis=1)
+    # ---- XBRL ----
+    xbrl_path = cfg.cache_dir / "xbrl_clean.csv"
+    xb_added = {c: [None] * len(raw) for c in XBRL_COLUMNS}
+    xb_counts = Counter()
+    if xbrl_path.exists():
+        xbrl = summarise_xbrl(xbrl_path)
+        ticker_ciks = load_ticker_ciks(cfg.sources_dir / "xbrl" / "company_tickers.json")
+        print(f"  XBRL companies         {len(xbrl):>7,}")
+        ciq = cfg.capitaliq
+        tick_col = (list(raw.columns)[column_index_from_string(str(ciq["col_ticker"])) - 1]
+                    if ciq.get("col_ticker") else None)
+        for i, row in raw.iterrows():
+            cik, how = match_xbrl(row[tick_col] if tick_col else None,
+                                  fd_ciks[i], xbrl, ticker_ciks)
+            xb_counts[how] += 1
+            if cik is None:
+                continue
+            x = xbrl[cik]
+            xb_added["xbrl_match_name"][i] = x["name"]
+            xb_added["xbrl_match_by"][i] = how
+            for c in XBRL_COLUMNS[2:]:
+                xb_added[c][i] = x.get(c)
+    else:
+        print(f"  {xbrl_path.name} not found - run 'python clean_xbrl.py'; XBRL columns left blank")
+
+    combined = pd.concat([raw, pd.DataFrame(added), pd.DataFrame(fd_added),
+                          pd.DataFrame(xb_added)], axis=1)
 
     # Employees: Capital IQ first. Only where Capital IQ has NO figure is
     # the SBIR headcount used, and employees_source says which it was, so
@@ -462,6 +599,13 @@ def main() -> int:
     print(f"  rejected (too generic) {fd_counts['rejected']:>7,}")
     print(f"  formd_raised = Yes     {(combined['formd_raised'] == 'Yes').sum():>7,}")
     print(f"  with recent money      {combined['formd_recent_usdmm'].notna().sum():>7,}")
+    xb = combined
+    print(f"\n  XBRL matched           {xb_counts['ticker'] + xb_counts['formd_cik']:>7,}")
+    print(f"    by ticker            {xb_counts['ticker']:>7,}")
+    print(f"    by Form D CIK        {xb_counts['formd_cik']:>7,}")
+    print(f"  with R&D expense       {xb['xbrl_rd_expense_usdmm'].notna().sum():>7,}")
+    print(f"  with revenue           {xb['xbrl_revenue_usdmm'].notna().sum():>7,}")
+    print(f"  with cash              {xb['xbrl_cash_usdmm'].notna().sum():>7,}")
     print(f"\n  written: {out_path}\n")
     return 0
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Fetch R&D expense from SEC XBRL frames  ->  data/sources/xbrl/
+"""Fetch R&D, revenue, cash and short-term investments from SEC XBRL frames
+->  data/sources/xbrl/
 
 Capital IQ tells you how big a company is (revenue, headcount). It does not
 tell you how much of that it spends on research. For a faculty partnership
@@ -18,19 +19,31 @@ How the frames API works:
 
   https://data.sec.gov/api/xbrl/frames/us-gaap/<Tag>/USD/CY2024.json
 
-Why only R&D and not revenue: revenue is fragmented across several tags
-(Revenues, RevenueFromContractWithCustomerExcludingAssessedTax, ...) and
-none is complete, and it would fill revenue for only ~24 companies in the
-datasource. R&D expense has one dominant tag and applies to all of them.
+Two kinds of concept:
+
+  FLOW  - money over a whole year (R&D expense, revenue).
+          Frame period CY2025 = calendar year 2025.
+  STOCK - money held on one day (cash, short-term investments), read off
+          the balance sheet. Frame period CY2026Q2I = as at 30 June 2026
+          (the trailing "I" means "instant"). Every 10-Q has a balance
+          sheet, so this is at most a quarter old - fresher than any
+          annual figure.
+
+Cash is the closest thing SEC publishes to "money it could spend on a
+sponsored-research agreement". Short-term investments are kept separate
+because biotechs often park most of their money there rather than in cash.
 
 Input:  nothing - it downloads what it needs
-Output: data/sources/xbrl/rd_expense_CY<year>.csv   one row per company
-        data/sources/xbrl/frames_rd_CY<year>.json   raw API response (cached)
-        data/sources/xbrl/company_tickers.json      SEC ticker -> CIK map
+Output: data/sources/xbrl/frames_<concept>_<period>.json  raw API response,
+                                                         read by clean_xbrl.py
+        data/sources/xbrl/<concept>_CY<year>.csv   flow concepts only, for
+                                                   the older enrich_xbrl.py
+        data/sources/xbrl/company_tickers.json     SEC ticker -> CIK map
 
 Usage:
-    python fetch_sec_xbrl.py                    # CY2023-CY2025
+    python fetch_sec_xbrl.py                    # CY2023-CY2025 + last 4 quarter-ends
     python fetch_sec_xbrl.py --years 2024 2025
+    python fetch_sec_xbrl.py --quarters 2026Q1 2026Q2
     python fetch_sec_xbrl.py --refresh          # ignore cache, refetch
 """
 from __future__ import annotations
@@ -42,13 +55,14 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 SOURCE_DIR = PROJECT_ROOT / "data" / "sources" / "xbrl"
 
-FRAMES = "https://data.sec.gov/api/xbrl/frames/us-gaap/{tag}/USD/CY{year}.json"
+FRAMES = "https://data.sec.gov/api/xbrl/frames/us-gaap/{tag}/USD/{period}.json"
 TICKERS = "https://www.sec.gov/files/company_tickers.json"
 TAG = "ResearchAndDevelopmentExpense"
 
@@ -59,12 +73,32 @@ TAG = "ResearchAndDevelopmentExpense"
 # Kymera 404s on Revenues but reports under the ASC 606 tag; Organogenesis
 # does the opposite. So both are fetched and enrich_xbrl.py resolves per
 # company. Order here is the priority order used there.
-DEFAULT_TAGS = [
+FLOW_TAGS = [
     "ResearchAndDevelopmentExpense",
+    # Some companies report R&D only under this narrower tag, which leaves
+    # out research bought in through acquisitions. Fallback only.
+    "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost",
     "RevenueFromContractWithCustomerExcludingAssessedTax",
     "Revenues",
     "RevenueFromContractWithCustomerIncludingAssessedTax",
 ]
+
+# Balance-sheet concepts. Same story as revenue: each company's accountants
+# pick one tag, so several are fetched and clean_xbrl.py takes the first a
+# company uses. They are alternatives, never added together - a company
+# reporting both ShortTermInvestments and MarketableSecuritiesCurrent is
+# usually describing the same money twice.
+INSTANT_TAGS = [
+    "CashAndCashEquivalentsAtCarryingValue",
+    # includes restricted cash - slightly higher; used only if the plain
+    # figure is missing
+    "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+    "ShortTermInvestments",
+    "MarketableSecuritiesCurrent",
+    "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
+]
+
+DEFAULT_TAGS = FLOW_TAGS + INSTANT_TAGS
 
 #: Short filename stem per tag, so the CSVs stay readable.
 TAG_SLUG = {
@@ -72,9 +106,47 @@ TAG_SLUG = {
     "RevenueFromContractWithCustomerExcludingAssessedTax": "revenue_asc606",
     "Revenues": "revenue_legacy",
     "RevenueFromContractWithCustomerIncludingAssessedTax": "revenue_asc606_incl",
+    "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost": "rd_expense_excl_iprd",
+    "CashAndCashEquivalentsAtCarryingValue": "cash",
+    "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents": "cash_incl_restricted",
+    "ShortTermInvestments": "short_term_investments",
+    "MarketableSecuritiesCurrent": "marketable_securities_current",
+    "AvailableForSaleSecuritiesDebtSecuritiesCurrent": "afs_debt_securities_current",
 }
 
 DEFAULT_YEARS = [2023, 2024, 2025]
+
+# A frame keeps filling up as late filers file: most companies file within
+# 45 days of a quarter-end and 90 days of a year-end, a few later. A copy
+# saved sooner than this after its period ended is fetched again next run;
+# one saved later is final and reused for ever.
+FINAL_AFTER_DAYS = 120
+
+
+def quarter_end(year: int, q: int) -> date:
+    return {1: date(year, 3, 31), 2: date(year, 6, 30),
+            3: date(year, 9, 30), 4: date(year, 12, 31)}[q]
+
+
+def default_quarters(today: Optional[date] = None, n: int = 4) -> list:
+    """The last n quarter-ends strictly before today, oldest first,
+    as (year, quarter). On 30 Sep 2026: 2025Q3, 2025Q4, 2026Q1, 2026Q2."""
+    today = today or date.today()
+    y, q = today.year, (today.month - 1) // 3 + 1
+    out = []
+    while len(out) < n:
+        if quarter_end(y, q) < today:
+            out.append((y, q))
+        y, q = (y, q - 1) if q > 1 else (y - 1, 4)
+    return sorted(out)
+
+
+def parse_quarter(text: str) -> tuple:
+    """'2026Q2' -> (2026, 2)."""
+    y, _, q = text.upper().partition("Q")
+    if not (y.isdigit() and q in ("1", "2", "3", "4")):
+        raise argparse.ArgumentTypeError(f"expected e.g. 2026Q2, got {text!r}")
+    return int(y), int(q)
 
 # SEC blocks requests without a User-Agent that identifies the caller, and
 # returns 403 rather than anything explanatory. This is their documented
@@ -125,15 +197,21 @@ def _get_json(url: str, retries: int = 4) -> Optional[dict]:
     raise RuntimeError(f"giving up after {retries} attempts: {last}")
 
 
-def load_or_fetch(path: Path, url: str, refresh: bool) -> Optional[dict]:
+def load_or_fetch(path: Path, url: str, refresh: bool,
+                  final_on: Optional[date] = None) -> Optional[dict]:
     """Fetch a URL, or reuse the copy already on disk.
 
-    A completed calendar year never changes, so re-downloading it is pure
-    waste - the same reason geocodes and embeddings are cached.
+    A finished period never changes, so re-downloading it is pure waste -
+    the same reason geocodes and embeddings are cached. `final_on` is the
+    date a period stops changing; a copy saved before it is refetched.
     """
     if path.exists() and not refresh:
-        print(f"  using cached {path.name} - pass --refresh to refetch")
-        return json.loads(path.read_text(encoding="utf-8"))
+        saved = date.fromtimestamp(path.stat().st_mtime)
+        if final_on is None or saved >= final_on:
+            print(f"  using cached {path.name} - pass --refresh to refetch")
+            return json.loads(path.read_text(encoding="utf-8"))
+        print(f"  {path.name} was saved {saved}, before the period was "
+              f"final ({final_on}) - refetching")
 
     data = _get_json(url)
     if data is None:
@@ -223,35 +301,48 @@ def write_csv(path: Path, rows: list) -> None:
         ) from e
 
 
-def fetch_tag(tag: str, years: list, tickers: dict, refresh: bool) -> list:
-    """Fetch one us-gaap concept for each year. Returns summary rows."""
+def periods_for(tag: str, years: list, quarters: list) -> list:
+    """(period label, year, date the period ends) to fetch for one tag.
+    Flow tags are asked for by calendar year, balance-sheet tags by
+    quarter-end."""
+    if tag in INSTANT_TAGS:
+        return [(f"CY{y}Q{q}I", y, quarter_end(y, q)) for y, q in quarters]
+    return [(f"CY{y}", y, date(y, 12, 31)) for y in sorted(years)]
+
+
+def fetch_tag(tag: str, years: list, quarters: list, tickers: dict,
+              refresh: bool) -> list:
+    """Fetch one us-gaap concept for each period. Returns summary rows."""
     slug = TAG_SLUG.get(tag, tag)
     summary = []
     print(f"\n--- {tag} ---")
-    for year in sorted(years):
-        raw_path = SOURCE_DIR / f"frames_{slug}_CY{year}.json"
-        frame = load_or_fetch(raw_path, FRAMES.format(tag=tag, year=year),
-                              refresh)
+    for period, year, ends in periods_for(tag, years, quarters):
+        raw_path = SOURCE_DIR / f"frames_{slug}_{period}.json"
+        frame = load_or_fetch(raw_path, FRAMES.format(tag=tag, period=period),
+                              refresh, ends + timedelta(days=FINAL_AFTER_DAYS))
         if frame is None:
-            print(f"  CY{year}: no frame published yet - skipped")
-            summary.append((tag, year, 0, 0, "not published"))
+            print(f"  {period}: not published (this tag is unused, or the "
+                  "period is too recent) - skipped")
+            summary.append((tag, period, 0, "not published"))
             continue
 
         pts = frame.get("pts", len(frame.get("data", [])))
-        rows = frame_to_rows(frame, year, tickers)
-        with_ticker = sum(1 for r in rows if r["ticker"])
-
         note = ""
         if pts < SPARSE_WARNING:
-            note = "INCOMPLETE - year not finished"
-            print(f"  CY{year}: WARNING - only {pts:,} companies reported.")
-            print("    A calendar year is not usable until companies have")
-            print("    filed annual reports, 60-90 days after their year ends.")
+            note = "INCOMPLETE - period too recent"
+            print(f"  {period}: WARNING - only {pts:,} companies reported.")
+            print("    Companies file 45 days after a quarter ends and 60-90")
+            print("    after a year ends. It will be refetched on a later run.")
 
-        csv_path = SOURCE_DIR / f"{slug}_CY{year}.csv"
-        write_csv(csv_path, rows)
-        print(f"  CY{year}: {pts:>6,} companies -> {csv_path.name}")
-        summary.append((tag, year, pts, with_ticker, note))
+        if tag in INSTANT_TAGS:
+            print(f"  {period}: {pts:>6,} companies -> {raw_path.name}")
+        else:
+            # The CSV is only for the older enrich_xbrl.py; clean_xbrl.py
+            # reads the JSON directly.
+            csv_path = SOURCE_DIR / f"{slug}_CY{year}.csv"
+            write_csv(csv_path, frame_to_rows(frame, year, tickers))
+            print(f"  {period}: {pts:>6,} companies -> {csv_path.name}")
+        summary.append((tag, period, pts, note))
     return summary
 
 
@@ -260,6 +351,9 @@ def main() -> int:
         description="Fetch SEC XBRL frames -> one CSV per concept per year.")
     ap.add_argument("--years", type=int, nargs="+", default=DEFAULT_YEARS,
                     help=f"Calendar years to fetch (default: {DEFAULT_YEARS})")
+    ap.add_argument("--quarters", type=parse_quarter, nargs="+", default=None,
+                    help="Quarter-ends for cash / short-term investments, "
+                         "e.g. 2026Q1 2026Q2 (default: the last 4)")
     ap.add_argument("--tag", nargs="+", default=None,
                     help="us-gaap concept(s) to fetch. Default: "
                          + ", ".join(DEFAULT_TAGS))
@@ -268,6 +362,7 @@ def main() -> int:
     args = ap.parse_args()
 
     tags = args.tag or DEFAULT_TAGS
+    quarters = sorted(args.quarters) if args.quarters else default_quarters()
 
     print("\n=== NexusAI: SEC XBRL fetch ===")
     SOURCE_DIR.mkdir(parents=True, exist_ok=True)
@@ -277,14 +372,16 @@ def main() -> int:
 
     summary = []
     for tag in tags:
-        summary.extend(fetch_tag(tag, args.years, tickers, args.refresh))
+        summary.extend(fetch_tag(tag, args.years, quarters, tickers,
+                                 args.refresh))
 
     print("\n" + "=" * 70)
-    print(f"  {'concept':<46}{'year':>6}{'companies':>12}")
-    for tag, year, pts, _, note in summary:
-        print(f"  {TAG_SLUG.get(tag, tag):<46}{year:>6}{pts:>12,}  {note}")
+    print(f"  {'concept':<32}{'period':>11}{'companies':>12}")
+    for tag, period, pts, note in summary:
+        print(f"  {TAG_SLUG.get(tag, tag):<32}{period:>11}{pts:>12,}  {note}")
     print(f"\n  Written to: {SOURCE_DIR}")
-    print("  Completed years never change - re-running reuses the cached JSON.")
+    print("  Finished periods never change - re-running reuses the cached JSON.")
+    print("  Next: python clean_xbrl.py")
     print("=" * 70 + "\n")
     return 0
 

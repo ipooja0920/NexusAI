@@ -24,6 +24,7 @@ SUITES = [
     ("Funding score", "tests.test_funding_score"),
     ("SBIR cleaning", "tests.test_clean_sbir"),
     ("Form D cleaning", "tests.test_clean_formd"),
+    ("XBRL cleaning", "tests.test_clean_xbrl"),
     ("End-to-end pipeline", "tests.test_pipeline"),
 ]
 
