@@ -67,9 +67,10 @@ companies only — figures come from their own SEC filings.
 | xbrl_match_by | text | How the match was made | `ticker` — Capital IQ ticker → SEC's ticker list → CIK; `formd_cik` — no usable ticker, but the Form D match's CIK files with SEC (raised privately, then listed; or an OTC / foreign ticker SEC doesn't list) | `ticker` | 289 ticker, 33 formd_cik |
 | xbrl_rd_expense_usdmm | number ($ millions) | R&D spend in the latest calendar year reported | Latest `rd_expense` year in `xbrl_clean.csv` | `90.404` | 293 |
 | xbrl_rd_year | year | That year | | `2025` | |
-| xbrl_cash_usdmm | number ($ millions) | Cash on the latest balance sheet | Latest quarter-end with cash or short-term investments | `180.2` | 302 |
-| xbrl_short_term_investments_usdmm | number ($ millions) | Securities it can sell within a year, **same balance sheet** as the cash. Blank = none reported that quarter | Same quarter-end as the cash | `95.0` | after fetch |
-| xbrl_cash_as_of | date | Date of that balance sheet | A quarter-end | `2026-06-30` | after fetch |
+| xbrl_cash_usdmm | number ($ millions) | Cash on the latest balance sheet | Latest quarter-end with cash or short-term investments | `23.37` (Corbus) | 302 |
+| xbrl_short_term_investments_usdmm | number ($ millions) | Securities it can sell within a year, **same balance sheet** as the cash. Blank = none reported that quarter | Same quarter-end as the cash | `94.571` (Corbus) | |
+| xbrl_cash_total_usdmm | number ($ millions) | Everything it could draw on that day: cash + short-term investments | Sum of the two on the same balance sheet; a missing one counts as 0 | `117.941` (Corbus, 30 Jun 2026) | 302 |
+| xbrl_cash_as_of | date | Date of that balance sheet | A quarter-end | `2026-06-30` (277 of 302) | 302 |
 
 SEC revenue has no column of its own: it goes straight into Capital IQ's
 revenue column where Capital IQ is blank, and `revenue_source` says so (see

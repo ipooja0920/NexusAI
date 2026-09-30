@@ -32,6 +32,8 @@ public companies only, figures from their own SEC filings:
   xbrl_short_term_investments_usdmm
                         securities it can sell within a year, same balance
                         sheet, $ millions. Blank = none reported.
+  xbrl_cash_total_usdmm cash + short-term investments: everything it could
+                        draw on that day, $ millions
   xbrl_cash_as_of       the date of that balance sheet (a quarter-end)
 
 No name matching at all: a ticker or a CIK belongs to exactly one company.
@@ -132,7 +134,8 @@ FORMD_COLUMNS = [
 XBRL_COLUMNS = [
     "xbrl_match_name", "xbrl_match_by",
     "xbrl_rd_expense_usdmm", "xbrl_rd_year",
-    "xbrl_cash_usdmm", "xbrl_short_term_investments_usdmm", "xbrl_cash_as_of",
+    "xbrl_cash_usdmm", "xbrl_short_term_investments_usdmm",
+    "xbrl_cash_total_usdmm", "xbrl_cash_as_of",
 ]
 
 FORMD_READ = ["company", "cik", "state", "filing_number", "filing_date",
@@ -351,11 +354,17 @@ def summarise_xbrl(path: Path) -> dict:
         if len(bs):
             latest = bs["period_end"].max()
             day = bs[bs["period_end"] == latest]
+            total = 0.0
             for concept, col in (("cash", "xbrl_cash_usdmm"),
                                  ("short_term_investments",
                                   "xbrl_short_term_investments_usdmm")):
                 v = day.loc[day["concept"] == concept, "value_usd"]
                 s[col] = _usdmm(v.iloc[0]) if len(v) else None
+                total += float(v.iloc[0]) if len(v) else 0.0
+            # everything it could draw on that day: cash + short-term
+            # investments (a missing one counts as none). Added before
+            # rounding, so it is exact rather than a sum of rounded parts.
+            s["xbrl_cash_total_usdmm"] = _usdmm(total)
             s["xbrl_cash_as_of"] = latest
         out[int(cik)] = s
     return out
