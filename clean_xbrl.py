@@ -13,8 +13,12 @@ Four concepts, each a question about a public company:
   short_term_investments  money parked in securities it can sell within a
                           year, on a quarter-end - where biotechs often keep
                           most of what they raised
+  cash_and_short_term_investments
+                          the company's OWN total of the two, on a
+                          quarter-end - a check on our sum, since a company
+                          can report investments under a label we miss
 
-The first two are FLOWS (a whole year, period CY2025). The last two are
+The first two are FLOWS (a whole year, period CY2025). The rest are
 STOCKS (one day, period CY2026Q2I = as at 30 June 2026).
 
 Why several SEC tags per concept: each company's accountants choose which
@@ -64,6 +68,13 @@ CONCEPTS = {
         "ShortTermInvestments",
         "MarketableSecuritiesCurrent",
         "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
+        "DebtSecuritiesHeldToMaturityAmortizedCostAfterAllowanceForCreditLossCurrent",
+        "HeldToMaturitySecuritiesCurrent",
+        "OtherShortTermInvestments",
+        "AvailableForSaleSecuritiesCurrent",
+    ],
+    "cash_and_short_term_investments": [
+        "CashCashEquivalentsAndShortTermInvestments",
     ],
 }
 TAG_TO_CONCEPT = {t: c for c, tags in CONCEPTS.items() for t in tags}

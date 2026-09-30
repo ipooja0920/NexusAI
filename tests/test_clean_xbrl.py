@@ -137,6 +137,21 @@ class TestTagPriority(unittest.TestCase):
         r = one(df, 1, "short_term_investments", "CY2026Q2I")
         self.assertEqual((r.value_usd, r.tag), (30, STI))
 
+    def test_less_common_investment_label_used_when_others_missing(self):
+        htm = "DebtSecuritiesHeldToMaturityAmortizedCostAfterAllowanceForCreditLossCurrent"
+        df = run({"a.json": frame(htm, "CY2026Q2I", [(1, "Acme", 70)])})
+        r = one(df, 1, "short_term_investments", "CY2026Q2I")
+        self.assertEqual((r.value_usd, r.tag), (70, htm))
+
+    def test_company_own_total_kept_as_its_own_concept(self):
+        """The reported total is a check on our sum, never a part of it."""
+        df = run({"a.json": frame(CASH, "CY2026Q2I", [(1, "Acme", 50)]),
+                  "b.json": frame("CashCashEquivalentsAndShortTermInvestments",
+                                  "CY2026Q2I", [(1, "Acme", 300)])})
+        self.assertEqual(one(df, 1, "cash", "CY2026Q2I").value_usd, 50)
+        self.assertEqual(one(df, 1, "cash_and_short_term_investments",
+                             "CY2026Q2I").value_usd, 300)
+
     def test_cash_and_investments_are_separate_concepts(self):
         df = run({"a.json": frame(CASH, "CY2026Q2I", [(1, "Acme", 50)]),
                   "b.json": frame(STI, "CY2026Q2I", [(1, "Acme", 30)])})

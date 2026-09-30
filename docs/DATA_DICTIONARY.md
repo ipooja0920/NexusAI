@@ -69,7 +69,8 @@ companies only — figures come from their own SEC filings.
 | xbrl_rd_year | year | That year | | `2025` | |
 | xbrl_cash_usdmm | number ($ millions) | Cash on the latest balance sheet | Latest quarter-end with cash or short-term investments | `23.37` (Corbus) | 302 |
 | xbrl_short_term_investments_usdmm | number ($ millions) | Securities it can sell within a year, **same balance sheet** as the cash. Blank = none reported that quarter | Same quarter-end as the cash | `94.571` (Corbus) | |
-| xbrl_cash_total_usdmm | number ($ millions) | Everything it could draw on that day: cash + short-term investments | Sum of the two on the same balance sheet; a missing one counts as 0 | `117.941` (Corbus, 30 Jun 2026) | 302 |
+| xbrl_cash_total_usdmm | number ($ millions) | Everything it could draw on that day | Cash + short-term investments on the same balance sheet (a missing one counts as 0) — or the company's **own reported total** for that day if that is larger, which catches investments filed under a label we don't read | `117.941` (Corbus, 30 Jun 2026) | 302 |
+| xbrl_cash_total_from | text | Where the total came from | `cash + short-term`, or `company's own total` | `cash + short-term` | 302 |
 | xbrl_cash_as_of | date | Date of that balance sheet | A quarter-end | `2026-06-30` (277 of 302) | 302 |
 
 SEC revenue has no column of its own: it goes straight into Capital IQ's
@@ -167,7 +168,7 @@ One row per public company per concept per period. Built by
 | Field | Meaning |
 |---|---|
 | company, cik, ticker | Who reported it. Ticker is the common-stock one (GOOG, not GOOGN) |
-| concept | `rd_expense`, `revenue` (a whole year) or `cash`, `short_term_investments` (one day) |
+| concept | `rd_expense`, `revenue` (a whole year) or `cash`, `short_term_investments`, `cash_and_short_term_investments` (one day; the last is the company's own total, used only as a check) |
 | period | `CY2025` = calendar year 2025; `CY2026Q2I` = as at 30 June 2026 (I = instant) |
 | period_type | `year` or `instant` |
 | period_start, period_end | Dates the figure covers; instant figures have only an end |

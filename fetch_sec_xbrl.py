@@ -96,6 +96,15 @@ INSTANT_TAGS = [
     "ShortTermInvestments",
     "MarketableSecuritiesCurrent",
     "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
+    # less common investment labels - a company that moved its cash into
+    # these would otherwise look as if the money had vanished
+    "DebtSecuritiesHeldToMaturityAmortizedCostAfterAllowanceForCreditLossCurrent",
+    "HeldToMaturitySecuritiesCurrent",
+    "OtherShortTermInvestments",
+    "AvailableForSaleSecuritiesCurrent",
+    # the company's OWN total of cash + short-term investments, used as a
+    # check on our sum (clean_xbrl.py / combine_companies.py)
+    "CashCashEquivalentsAndShortTermInvestments",
 ]
 
 DEFAULT_TAGS = FLOW_TAGS + INSTANT_TAGS
@@ -112,6 +121,11 @@ TAG_SLUG = {
     "ShortTermInvestments": "short_term_investments",
     "MarketableSecuritiesCurrent": "marketable_securities_current",
     "AvailableForSaleSecuritiesDebtSecuritiesCurrent": "afs_debt_securities_current",
+    "DebtSecuritiesHeldToMaturityAmortizedCostAfterAllowanceForCreditLossCurrent": "htm_debt_securities_current",
+    "HeldToMaturitySecuritiesCurrent": "htm_securities_current",
+    "OtherShortTermInvestments": "other_short_term_investments",
+    "AvailableForSaleSecuritiesCurrent": "afs_securities_current",
+    "CashCashEquivalentsAndShortTermInvestments": "cash_and_short_term_investments",
 }
 
 DEFAULT_YEARS = [2023, 2024, 2025]
