@@ -190,6 +190,37 @@ One row per public company per concept per period. Built by
 
 ---
 
+## 5. `data/cache/ctgov_clean.csv`
+
+One row per **trial per company** on it, from ClinicalTrials.gov. Built by
+`clean_clinicaltrials.py` from the pages `fetch_clinicaltrials.py` downloads
+(trials where a company is the lead sponsor **or** a collaborator). No
+matching. No person is named: investigators and contacts are never downloaded.
+
+| Field | Meaning |
+|---|---|
+| company | The company, as ClinicalTrials.gov spells it |
+| role | `lead sponsor` or `collaborator` |
+| nct_id, title | The trial's ID (NCT…) and short title |
+| status | ClinicalTrials.gov status, e.g. RECRUITING, COMPLETED |
+| is_active | True = running now (recruiting, not yet recruiting, active, enrolling by invitation). False = completed, terminated, suspended, withdrawn, or status unknown |
+| study_type | INTERVENTIONAL (tests a treatment) or OBSERVATIONAL |
+| phase, phase_number | e.g. `Phase 1/2` and its highest number (2). Blank for studies without phases |
+| start_date, start_year | When the trial started (or is planned to) |
+| completion_date | Planned or actual end |
+| last_update | When the record was last updated |
+| enrollment | Number of participants |
+| conditions | Diseases studied, e.g. `Type 2 Diabetes` |
+| interventions | Treatments tested, e.g. drug or device names |
+| partners | Universities, hospitals and foundations on the trial, as written |
+| other_companies | Other companies on the same trial |
+| sites_total, sites_us, sites_ct | Number of trial sites: all, in the US, in Connecticut |
+| ct_sites | Connecticut sites, e.g. `UConn Health (Farmington)` |
+
+Expanded-access programmes (not trials) are dropped.
+
+---
+
 ## Things to remember
 
 - **"Active" depends on the day the file is built.** Re-run
@@ -203,8 +234,8 @@ One row per public company per concept per period. Built by
   SBIR dollar figure says whether a company can sponsor research now — which
   is why `sbir_total_usd` was dropped. Form D money *is* free cash.
 - **Rebuild order after new downloads:** `python clean_sbir.py`,
-  `python clean_formd.py`, `python clean_xbrl.py`, then
-  `python combine_companies.py`.
+  `python clean_formd.py`, `python clean_xbrl.py`,
+  `python clean_clinicaltrials.py`, then `python combine_companies.py`.
 - **XBRL cash needs a fetch from your Mac's Terminal** (SEC can't be reached
   from Claude's environments): `python fetch_sec_xbrl.py`. Frames for a
   recent quarter keep filling for ~120 days; the fetch re-downloads those
