@@ -25,6 +25,7 @@ SUITES = [
     ("SBIR cleaning", "tests.test_clean_sbir"),
     ("Form D cleaning", "tests.test_clean_formd"),
     ("XBRL cleaning", "tests.test_clean_xbrl"),
+    ("XBRL fetch + combine", "tests.test_xbrl_pipeline"),
     ("End-to-end pipeline", "tests.test_pipeline"),
 ]
 

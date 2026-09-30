@@ -422,6 +422,30 @@ def match_xbrl(ticker, formd_cik, xbrl, ticker_ciks) -> tuple:
     return None, None
 
 
+def _no_revenue(v) -> bool:
+    """Capital IQ has no revenue figure: blank or "-". Its 0 is a
+    reported zero and counts as a figure."""
+    return v is None or (isinstance(v, float) and v != v) or \
+        str(v).strip() in ("", "-", "nan")
+
+
+def fill_revenue(ciq: list, sec: list, sec_year: list) -> tuple:
+    """(revenue values, revenue_source) - Capital IQ first; SEC only where
+    Capital IQ has nothing, however old the SEC figure is."""
+    out, source = [], []
+    for c, v, y in zip(ciq, sec, sec_year):
+        if not _no_revenue(c):
+            out.append(c)
+            source.append("Capital IQ")
+        elif v is not None:
+            out.append(str(v))
+            source.append(f"SEC XBRL ({y})")
+        else:
+            out.append(c)
+            source.append(None)
+    return out, source
+
+
 # ----------------------------------------------------------------------
 # The join
 # ----------------------------------------------------------------------
@@ -589,18 +613,8 @@ def main() -> int:
     rev_col = list(raw.columns)[column_index_from_string(
         str(cfg.capitaliq["col_revenue"])) - 1]
 
-    def _no_revenue(v):
-        return v is None or (isinstance(v, float) and v != v) or \
-            str(v).strip() in ("", "-", "nan")
-    rev_source = []
-    for i in range(len(combined)):
-        if not _no_revenue(combined.at[i, rev_col]):
-            rev_source.append("Capital IQ")
-        elif xb_rev[i] is not None:
-            combined.at[i, rev_col] = str(xb_rev[i])
-            rev_source.append(f"SEC XBRL ({xb_rev_year[i]})")
-        else:
-            rev_source.append(None)
+    filled, rev_source = fill_revenue(list(combined[rev_col]), xb_rev, xb_rev_year)
+    combined[rev_col] = filled
     combined.insert(combined.columns.get_loc(rev_col) + 1,
                     "revenue_source", rev_source)
 
