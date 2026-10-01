@@ -47,9 +47,27 @@ from nexus.scoring import (distance_score, employee_score, parse_employees,
                            parse_revenue, revenue_score)
 from nexus.settings import Settings
 
-# source columns of the combined file carried into the enriched sheet
+# source columns of the combined file the scores read (the rest stay in the
+# combined file only)
 SOURCE_PREFIXES = ("employees_source", "revenue_source", "sbir_", "university_",
                    "formd_", "xbrl_", "ct_", "oa_")
+
+# combined-file columns carried into the enriched sheet: only those a score
+# is computed from, so each score sits beside its evidence
+SCORE_INPUTS = [
+    "employees_source", "revenue_source",          # which figure was scored
+    # funding_score
+    "formd_recent_usdmm", "formd_raised",
+    "xbrl_cash_total_usdmm", "xbrl_cash_as_of",
+    "xbrl_rd_expense_usdmm", "xbrl_rd_year",
+    "sbir_active_usdmm",
+    "oa_funded_university", "oa_last_funded_year",
+    # academic_adjustment
+    "oa_coauthored_university", "sbir_awarded",
+    "university_past", "university_current",
+    "ct_university_past", "ct_university_current",
+]
+CT_ACTIVE = "ct_trials_active"   # only carried when its penalty is switched on
 
 BASE_COLUMNS = [
     "company", "website", "description", "address_cleaned", "company_type",
@@ -211,7 +229,8 @@ def main() -> int:
             print(f"  [{done}/{n}] processed ({time.time()-t0:.0f}s elapsed)")
             caches.save_all()   # periodic save so interrupts lose nothing
 
-    columns = BASE_COLUMNS + source_cols + ["embedding_key"]
+    inputs = SCORE_INPUTS + ([CT_ACTIVE] if cfg.academic.get("ct_active_penalty") else [])
+    columns = BASE_COLUMNS + [c for c in inputs if c in df.columns] + ["embedding_key"]
     write_enriched(cfg.companies_enriched, records, columns)
     caches.save_all()
 

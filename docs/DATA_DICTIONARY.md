@@ -293,8 +293,17 @@ match happens at the combine step.
 
 ## 7. `data/companies_enriched.xlsx` — scores
 
-Built by `enrich_companies.py` from the combined file (every source column
-carried across). Settings in `config.yaml`.
+Built by `enrich_companies.py` from the combined file. Only the combined
+columns a score is computed from are carried across (`employees_source`,
+`revenue_source`, the funding inputs `formd_recent_usdmm`, `formd_raised`,
+`xbrl_cash_total_usdmm`, `xbrl_cash_as_of`, `xbrl_rd_expense_usdmm`,
+`xbrl_rd_year`, `sbir_active_usdmm`, `oa_funded_university`,
+`oa_last_funded_year`, and the academic inputs `oa_coauthored_university`,
+`sbir_awarded`, `university_past`, `university_current`,
+`ct_university_past`, `ct_university_current`; `ct_trials_active` only when
+its penalty is switched on). Topics, trial conditions and SBIR titles appear
+through `research_focus`; everything else stays in the combined file.
+Settings in `config.yaml`.
 
 | Field | Meaning |
 |---|---|
