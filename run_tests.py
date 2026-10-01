@@ -30,6 +30,7 @@ SUITES = [
     ("ClinicalTrials.gov cleaning", "tests.test_clean_clinicaltrials"),
     ("ClinicalTrials.gov combine", "tests.test_ctgov_combine"),
     ("OpenAlex ties fetch", "tests.test_fetch_openalex_ties"),
+    ("OpenAlex cleaning", "tests.test_clean_openalex"),
     ("End-to-end pipeline", "tests.test_pipeline"),
 ]
 

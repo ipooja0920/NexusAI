@@ -245,6 +245,33 @@ Expanded-access programmes (not trials) are dropped.
 
 ---
 
+## 6. `data/cache/openalex_companies.csv` and `openalex_ties.csv`
+
+From OpenAlex, built by `clean_openalex.py` from what `fetch_openalex_ties.py`
+downloaded (counts only — no paper titles, no author names). Covers the 1,282
+US companies in OpenAlex whose name or website could be one of ours; the real
+match happens at the combine step.
+
+**openalex_companies.csv** — one row per OpenAlex company
+
+| Field | Meaning |
+|---|---|
+| institution_id, funder_id | OpenAlex IDs: I… = the company as a research publisher, F… = as a funder |
+| company, website, city | As OpenAlex has them |
+| topics | Its 5 most frequent research topics |
+| papers_since_2005, papers_by_year | Papers its own staff wrote, total and per year (`2025:40; 2024:35`) |
+| funded_papers_since_2005, funded_papers_by_year | Papers it funded, total and per year |
+
+**openalex_ties.csv** — one row per company per university / hospital
+
+| Field | Meaning |
+|---|---|
+| role | `funded` — the university wrote papers the company paid for; `coauthored` — the company's staff wrote papers with it |
+| university, university_type, university_country | OpenAlex institutions of type education or healthcare only, any country |
+| papers_2005_2023, papers_2024_on, papers_total | Papers in each period |
+
+---
+
 ## Things to remember
 
 - **One row per company - only when known.** Capital IQ lists some companies
