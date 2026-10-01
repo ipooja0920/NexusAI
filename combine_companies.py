@@ -26,7 +26,10 @@ matches are confirmed by WEBSITE (match_company, rule 2 and 3).
 
   oa_match_name             the company as OpenAlex names it
   oa_match_by               name | name+website | website | ambiguous |
-                            unconfirmed
+                            unconfirmed. "website" (no name match at all)
+                            only when no other Capital IQ company has the
+                            same website - a parent's website shared by its
+                            subsidiaries identifies none of them
   oa_topics                 its 5 most frequent research topics
   oa_last_funded_year       latest year a paper it funded was published
   oa_funded_university      True if a university or hospital (any country)
@@ -954,9 +957,16 @@ def main() -> int:
             for d in v["domains"]:
                 oa_by_domain[d].add(k)
         oa_by_domain = {d: next(iter(k)) for d, k in oa_by_domain.items() if len(k) == 1}
+        # A website-only match needs the website to be THIS company's alone:
+        # Capital IQ lists subsidiaries under the parent's website (16
+        # Hackensack Meridian entities share one), and then the website
+        # cannot say which of them OpenAlex means. Name+website is unaffected.
+        ciq_domains = raw[site_col].map(website_domain)
+        shared = {d for d, n in ciq_domains.value_counts().items() if n > 1}
         for i, row in raw.iterrows():
+            own_site = ciq_domains.iat[i] not in shared
             k, how, note = match_company(row[name_col], row[site_col], None,
-                                         oa, oa_by_name, oa_by_domain)
+                                         oa, oa_by_name, oa_by_domain if own_site else None)
             oa_counts[how] += 1
             if k is None:
                 if how in ("ambiguous", "unconfirmed"):

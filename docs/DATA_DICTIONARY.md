@@ -110,12 +110,12 @@ treated as one.
 
 | Field | Type | Meaning | How it's derived | Example | Filled |
 |---|---|---|---|---|---|
-| oa_match_name | text | The company as OpenAlex names it | For unconfirmed rows, the candidate | `Abiomed (United States)` | 1,157 |
-| oa_match_by | text | How the match was made | `name`, `name+website`, `website`; or `unconfirmed` (similar name, website differs or missing) | `name+website` | 901 matched (91 name, 573 name+website, 237 website); 256 unconfirmed |
-| oa_topics | text | Its 5 most frequent research topics | From OpenAlex | `Computational Drug Discovery Methods; …` | 633 |
-| oa_last_funded_year | year | Latest year a paper it funded was published | Latest year among papers it funded since 2005 (any author). A few companies funded papers but none by a university, so this can be filled while `oa_funded_university` is False | `2025` | 220 (135 in 2025 or later) |
-| oa_funded_university | True / False | A university or hospital (any country) wrote papers it funded since 2005 | | `True` | 217 True |
-| oa_coauthored_university | True / False | Its own staff wrote papers with a university or hospital since 2005 | | `True` | 702 True |
+| oa_match_name | text | The company as OpenAlex names it | For unconfirmed rows, the candidate | `Abiomed (United States)` | 1,013 |
+| oa_match_by | text | How the match was made | `name`, `name+website`, `website`; or `unconfirmed` (similar name, website differs or missing). `website` (no name match) only when no other Capital IQ company has the same website — a parent's website shared by its subsidiaries identifies none of them | `name+website` | 757 matched (91 name, 573 name+website, 93 website); 256 unconfirmed |
+| oa_topics | text | Its 5 most frequent research topics | From OpenAlex | `Computational Drug Discovery Methods; …` | 579 |
+| oa_last_funded_year | year | Latest year a paper it funded was published | Latest year among papers it funded since 2005 (any author). A few companies funded papers but none by a university, so this can be filled while `oa_funded_university` is False | `2025` | 134 (89 in 2025 or later) |
+| oa_funded_university | True / False | A university or hospital (any country) wrote papers it funded since 2005 | | `True` | 131 True |
+| oa_coauthored_university | True / False | Its own staff wrote papers with a university or hospital since 2005 | | `True` | 645 True |
 
 ### Matching rules
 
