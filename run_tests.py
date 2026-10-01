@@ -29,6 +29,7 @@ SUITES = [
     ("XBRL fetch + combine", "tests.test_xbrl_pipeline"),
     ("ClinicalTrials.gov cleaning", "tests.test_clean_clinicaltrials"),
     ("ClinicalTrials.gov combine", "tests.test_ctgov_combine"),
+    ("OpenAlex ties fetch", "tests.test_fetch_openalex_ties"),
     ("End-to-end pipeline", "tests.test_pipeline"),
 ]
 
