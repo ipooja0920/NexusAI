@@ -113,7 +113,7 @@ treated as one.
 | oa_match_name | text | The company as OpenAlex names it | For unconfirmed rows, the candidate | `Abiomed (United States)` | 1,157 |
 | oa_match_by | text | How the match was made | `name`, `name+website`, `website`; or `unconfirmed` (similar name, website differs or missing) | `name+website` | 901 matched (91 name, 573 name+website, 237 website); 256 unconfirmed |
 | oa_topics | text | Its 5 most frequent research topics | From OpenAlex | `Computational Drug Discovery Methods; …` | 633 |
-| oa_funded_papers_by_year | text | Papers it funded, per year since 2005 | Newest first, years with none left out | `2025:3; 2024:1; 2023:1` | 220 |
+| oa_last_funded_year | year | Latest year a paper it funded was published | Latest year among papers it funded since 2005 (any author). A few companies funded papers but none by a university, so this can be filled while `oa_funded_university` is False | `2025` | 220 (135 in 2025 or later) |
 | oa_funded_university | True / False | A university or hospital (any country) wrote papers it funded since 2005 | | `True` | 217 True |
 | oa_coauthored_university | True / False | Its own staff wrote papers with a university or hospital since 2005 | | `True` | 702 True |
 

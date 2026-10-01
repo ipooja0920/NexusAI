@@ -28,8 +28,7 @@ matches are confirmed by WEBSITE (match_company, rule 2 and 3).
   oa_match_by               name | name+website | website | ambiguous |
                             unconfirmed
   oa_topics                 its 5 most frequent research topics
-  oa_funded_papers_by_year  papers it funded, per year since 2005
-                            ("2025:12; 2024:8; ...")
+  oa_last_funded_year       latest year a paper it funded was published
   oa_funded_university      True if a university or hospital (any country)
                             wrote papers it funded since 2005, else False
   oa_coauthored_university  True if its own staff wrote papers with a
@@ -191,7 +190,7 @@ CT_TYPES = {"DRUG": "Drug", "DEVICE": "Device", "BIOLOGICAL": "Biological",
             "DIAGNOSTIC_TEST": "Diagnostic test"}        # OTHER left out
 
 OA_COLUMNS = [
-    "oa_match_name", "oa_match_by", "oa_topics", "oa_funded_papers_by_year",
+    "oa_match_name", "oa_match_by", "oa_topics", "oa_last_funded_year",
     "oa_funded_university", "oa_coauthored_university",
 ]
 
@@ -580,6 +579,12 @@ def _add_years(cells) -> str | None:
     return "; ".join(f"{y}:{years[y]}" for y in sorted(years, reverse=True)) or None
 
 
+def _last_year(cells) -> int | None:
+    """Latest year in "2025:3; 2024:1" cells (both records of a company)."""
+    years = _add_years(cells)
+    return int(years.split(":")[0]) if years else None
+
+
 def summarise_openalex(path: Path) -> dict:
     """key -> summary, one per OpenAlex company.
 
@@ -603,7 +608,7 @@ def summarise_openalex(path: Path) -> dict:
             "domains": {d for d in g["website"].map(website_domain) if d},
             "zips": set(),                                  # OpenAlex has no ZIP
             "oa_topics": txt("topics"),
-            "oa_funded_papers_by_year": _add_years(g["funded_papers_by_year"]),
+            "oa_last_funded_year": _last_year(g["funded_papers_by_year"]),
             "oa_funded_university": bool(g["funded_universities"].notna().any()),
             "oa_coauthored_university": bool(g["coauthor_universities"].notna().any()),
         }

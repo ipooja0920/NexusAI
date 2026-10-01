@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from combine_companies import _add_years, match_company, summarise_openalex
+from combine_companies import _add_years, _last_year, match_company, summarise_openalex
 
 COLS = ["institution_id", "funder_id", "company", "website", "city", "topics",
         "papers_since_2005", "papers_by_year", "funded_papers_since_2005",
@@ -50,7 +50,7 @@ class TestOpenAlex(unittest.TestCase):
                          funded_papers_by_year="2025:2; 2024:1", topics="Gene therapy"))
         v = next(iter(s.values()))
         self.assertEqual((v["oa_funded_university"], v["oa_coauthored_university"]), (True, False))
-        self.assertEqual((v["oa_funded_papers_by_year"], v["oa_topics"]), ("2025:2; 2024:1", "Gene therapy"))
+        self.assertEqual((v["oa_last_funded_year"], v["oa_topics"]), (2025, "Gene therapy"))
 
     def test_funder_and_institution_records_of_one_company_merged(self):
         """'Acorda Therapeutics' (funder) and 'Acorda Therapeutics (United States)'
@@ -63,12 +63,14 @@ class TestOpenAlex(unittest.TestCase):
         self.assertEqual(len(s), 1)
         v = next(iter(s.values()))
         self.assertEqual((v["oa_funded_university"], v["oa_coauthored_university"]), (True, True))
-        self.assertEqual(v["oa_funded_papers_by_year"], "2024:3; 2020:1")
+        self.assertEqual(v["oa_last_funded_year"], 2024)
         self.assertEqual(v["oa_topics"], "Multiple sclerosis")
 
     def test_add_years(self):
         self.assertEqual(_add_years(["2025:1; 2024:2", None, "2024:1"]), "2025:1; 2024:3")
         self.assertIsNone(_add_years([None, float("nan")]))
+        self.assertEqual(_last_year(["2019:1", "2023:2; 2005:1"]), 2023)
+        self.assertIsNone(_last_year([None]))
 
 
 if __name__ == "__main__":
