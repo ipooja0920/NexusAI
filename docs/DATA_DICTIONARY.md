@@ -344,19 +344,25 @@ description, nature of research, primary and secondary industry sector, and
 the "anything else" note (industry interests). Emails, IDs, years in post and
 workflow fields are never read. The profile used is in **Run Info**.
 
-Two passes, one tab each:
+Companies are ranked **separately in three size tiers** (revenue, `size_tiers`
+in config.yaml), one tab each, each with its own top 40 (partnership score)
+and top 20:
 
-| Tab | What was AI-scored for alignment |
-|---|---|
-| Top Matches - 300 pre-filter | the 300 companies closest to the research profile by embedding similarity |
-| Top Matches - all companies | every company with a description (~19,800; ~1,900 have none) |
+| Tab | Companies | What was AI-scored for alignment |
+|---|---|---|
+| Small - 300 pre-filter | under $100m revenue, or revenue unknown (~21,500) | the 300 small companies closest to the research profile by embedding similarity |
+| Small - all companies | same | every small company with a description (~19,600) — skipped with `--no-full` |
+| Mid ($100m-$1bn) | $100m – $1bn (~190) | all of them |
+| Large ($1bn+) | $1bn and above (~80) | all of them |
 
-In each: the top 40 by preliminary score (distance, size, alignment) get
-the partnership score, then the final score picks the top 20.
+Revenue is the company's own Capital IQ figure (SEC where Capital IQ is
+blank), so a subsidiary listed separately (e.g. a $474m unit of Johnson &
+Johnson) sits in the tier of its own revenue, not its parent's.
 
 | Column | Meaning |
 |---|---|
 | Justification | 2–3 sentences: which of the researcher's keywords / problems / methods the company's work touches, then distance, size, money and university record as far as the figures support |
+| Size | Small / Mid / Large (above) |
 | Overall Score | Final weighted score (above) |
 | Sector Match | `Primary sector` / `Secondary sector`: the company's Capital IQ industry group is the one the researcher named. Capital IQ here holds only two industry groups (Health Care Equipment and Services; Pharmaceuticals, Biotechnology and Life Sciences) |
 | Alignment Score (1-9), Reason | AI: research ↔ company profile |
@@ -364,8 +370,9 @@ the partnership score, then the final score picks the top 20.
 | Funding Score (0-1), Reason | From the enriched sheet |
 | Company Profile | The text the AI read |
 
-**All Companies** lists every company from the all-companies pass with its
-stage, `In 300 Pre-filter` (Yes/No) and scores. Alignment scores are cached
+**All Companies** lists every company, grouped Small / Mid / Large, with its
+stage within its tier, `In 300 Pre-filter` (Yes/No for small companies, "All
+scored" for mid and large) and scores. Alignment scores are cached
 (`data/cache/alignment_scores.json`), so an interrupted run resumes and the
 second pass reuses the first pass's 300 scores. Partnership scores are cached
 per company and profile text, shared by every faculty.

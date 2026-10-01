@@ -5,15 +5,18 @@ Faculty come from the BD-IFR Faculty Registration export (CSV) - pick one
 with --row (its spreadsheet row; the header is row 1) or --faculty "Name" -
 or, with neither, from the old Faculty Database (every row with Flag = N).
 
-For each faculty, two passes over the companies:
-  1. WITH the pre-filter: embedding similarity -> the closest 300 companies
-     -> AI alignment score
-  2. WITHOUT it: AI alignment score for every company that has a
-     description (about 20,000), run `openai.concurrency` calls at a time
-In each pass: preliminary score -> top 40 get the AI partnership score
+Companies are ranked separately in three size tiers (config size_tiers):
+  Small  under $100m revenue, or revenue unknown (~21,500):
+         tab 1 WITH the pre-filter - embedding similarity -> the closest 300
+         small companies -> AI alignment score;
+         tab 2 WITHOUT it (unless --no-full) - every small company with a
+         description, `openai.concurrency` AI calls at a time
+  Mid    $100m - $1bn (~190): all AI-scored
+  Large  $1bn and above (~80): all AI-scored
+In each tab: preliminary score -> top 40 get the AI partnership score
 (cached across faculty) -> final weighted score -> top 20. Every top-20
 company gets a written justification. One workbook per faculty: a tab per
-pass, All Companies, Run Info.
+tier (and pass), All Companies, Run Info.
 
 Alignment scores are cached (faculty profile x company text), so an
 interrupted run picks up where it stopped and the second pass reuses the
@@ -280,21 +283,60 @@ def justifications(indices, companies, texts, sectors, profile, align, partner,
 # One faculty
 # ----------------------------------------------------------------------
 
+TIERS = ("Small", "Mid", "Large")
+
+
+def size_tier(revenue, tiers_cfg: dict) -> str:
+    """Small: under small_below $USDmm or no revenue figure; Mid: up to
+    large_from; Large: large_from and above."""
+    try:
+        v = float(revenue)
+    except (TypeError, ValueError):
+        return "Small"
+    if v != v or v < tiers_cfg["small_below"]:
+        return "Small"
+    return "Mid" if v < tiers_cfg["large_from"] else "Large"
+
+
+def _money(v) -> str:
+    """$USDmm -> '$100m' / '$1bn'."""
+    return f"${v / 1000:g}bn" if v >= 1000 else f"${v:g}m"
+
+
+def tier_titles(tiers_cfg: dict) -> dict:
+    lo, hi = tiers_cfg["small_below"], tiers_cfg["large_from"]
+    return {"Mid": f"Mid ({_money(lo)}-{_money(hi)})", "Large": f"Large ({_money(hi)}+)"}
+
+
 def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, client,
                       full: bool = True, sample: int = 0) -> str:
+    """One faculty, ranked separately within each company size tier:
+      Small (under $100m or revenue unknown): the closest `top_n_candidates`
+          small companies by embedding similarity, and - unless --no-full -
+          every small company with a description, as a second tab
+      Mid ($100m-$1bn) and Large ($1bn+): few enough to AI-score them all
+    Each tier gets its own top 40 (partnership) and top 20."""
     n = len(companies)
     profile = build_research_profile(fac)
     print(f"\n{'='*60}\nFaculty: {fac['name']}  ({fac.get('department')})")
     print(f"Profile: {profile[:160]}{'...' if len(profile) > 160 else ''}")
     texts = [company_text(c) for c in companies]
     sectors = [sector_match(c.get("industry"), fac) for c in companies]
+    tiers_cfg = cfg.raw.get("size_tiers") or {"small_below": 100, "large_from": 1000}
+    tier = [size_tier(c.get("revenue_usdmm"), tiers_cfg) for c in companies]
+    members = {t: [gi for gi in range(n) if tier[gi] == t] for t in TIERS}
+    print("  [size] " + ", ".join(f"{t}: {len(members[t]):,}" for t in TIERS))
+    titles = tier_titles(tiers_cfg)
     scoring.reset_usage()
     t_start = time.time()
+    align, partner = {}, {}
+    passes = []          # (tab title, tier, pass result)
 
-    # ---------- Pass 1: with the pre-filter ----------
+    # ---------- Small: pre-filter ----------
+    small = members["Small"]
     top_n = cfg.prefilter["top_n_candidates"] if cfg.prefilter["enabled"] else 0
     sims = None
-    if top_n and top_n > 0 and n > top_n:
+    if top_n and top_n > 0 and len(small) > top_n:
         profile_vec = embed_text(client, cfg.openai["embedding_model"], profile, caches)
         company_vecs = [caches.get_embedding(company_embedding_text(c["company"], texts[i]))
                         for i, c in enumerate(companies)]
@@ -303,33 +345,32 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
             print(f"  [prefilter] WARNING: {n_missing} companies have no embedding "
                   "(re-run enrich_companies.py) - they rank last in pre-filter")
         sims = rank_by_similarity(profile_vec, company_vecs)
-        cand_a = select_candidates(sims, top_n)
-        print(f"  [prefilter] {n} companies -> {len(cand_a)} candidates")
+        cand_a = [gi for gi in select_candidates(sims, 0) if tier[gi] == "Small"][:top_n]
+        print(f"  [prefilter] {len(small):,} small companies -> {len(cand_a)} candidates")
     else:
-        cand_a = list(range(n))
-        print(f"  [prefilter] not needed - scoring all {n} companies")
+        cand_a = list(small)
+    pre_label = f"{len(cand_a)} pre-filter" if len(cand_a) < len(small) else "all companies"
 
-    align, partner = {}, {}
-    print("\n  Pass 1: pre-filter")
-    score_alignments(cand_a, companies, texts, profile, cfg, caches, client, align)
-    pass_a = run_pass(cand_a, companies, texts, align, partner, cfg, caches, client)
-    passes = {f"Top Matches - {len(cand_a)} pre-filter"
-              if len(cand_a) < n else "Top Matches - pre-filter": pass_a}
+    if small:
+        print(f"\n  Small - {pre_label}")
+        score_alignments(cand_a, companies, texts, profile, cfg, caches, client, align)
+        passes.append((f"Small - {pre_label}", "Small",
+                       run_pass(cand_a, companies, texts, align, partner, cfg, caches, client)))
 
-    # ---------- Pass 2: without the pre-filter ----------
-    pass_b = None
-    if full and len(cand_a) < n:
-        with_text = [gi for gi in range(n) if texts[gi]]
+    # ---------- Small: every company (no pre-filter) ----------
+    if small and full and len(cand_a) < len(small):
+        with_text = [gi for gi in small if texts[gi]]
         if sample and sims is not None:
             in_a = set(cand_a)
-            rest = [gi for gi in select_candidates(sims, 0) if gi not in in_a and texts[gi]]
+            rest = [gi for gi in select_candidates(sims, 0)
+                    if tier[gi] == "Small" and gi not in in_a and texts[gi]]
             cand_b = cand_a + rest[:sample]
-            title = f"Top Matches - sample {len(cand_b)}"
+            title = f"Small - sample {len(cand_b)}"
         else:
             cand_b = with_text
-            title = "Top Matches - all companies"
-        print(f"\n  Pass 2: no pre-filter - {len(cand_b):,} companies "
-              f"({n - len(with_text):,} have no description and are not scored)")
+            title = "Small - all companies"
+        print(f"\n  {title}: {len(cand_b):,} companies "
+              f"({len(small) - len(with_text):,} small companies have no description)")
         t_b = time.time()
         calls_before = scoring.USAGE["calls"]
         made = score_alignments(cand_b, companies, texts, profile, cfg, caches, client, align)
@@ -337,22 +378,29 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         if sample and made:
             remaining = len(with_text) - len(cand_b)
             per = secs / made
+            calls = max(1, scoring.USAGE["calls"] - calls_before)
             print(f"\n  [sample] {made} new alignment calls in {secs:.0f}s "
                   f"({per:.2f}s each with {cfg.openai.get('concurrency', 16)} in parallel)")
-            calls = max(1, scoring.USAGE["calls"] - calls_before)
             print(f"  [sample] tokens per call: {scoring.USAGE['prompt_tokens'] / calls:,.0f} in, "
                   f"{scoring.USAGE['completion_tokens'] / calls:,.0f} out (incl. reasoning)")
             print(f"  [sample] the full pass would need ~{remaining:,} more calls: "
                   f"about {remaining * per / 60:.0f} minutes")
-        pass_b = run_pass(cand_b, companies, texts, align, partner, cfg, caches, client)
-        passes[title] = pass_b
-    elif full:
-        passes = {"Top Matches - all companies": pass_a}
+        passes.append((title, "Small",
+                       run_pass(cand_b, companies, texts, align, partner, cfg, caches, client)))
+
+    # ---------- Mid and Large: score them all ----------
+    for t in ("Mid", "Large"):
+        if not members[t]:
+            continue
+        print(f"\n  {titles[t]}: all {len(members[t]):,} companies")
+        score_alignments(members[t], companies, texts, profile, cfg, caches, client, align)
+        passes.append((titles[t], t, run_pass(members[t], companies, texts, align, partner,
+                                              cfg, caches, client)))
 
     # ---------- Justifications for every top-20 company ----------
-    finals = list(dict.fromkeys(gi for p in passes.values() for gi in p["final"]))
+    finals = list(dict.fromkeys(gi for _, _, p in passes for gi in p["final"]))
     funding, academic = {}, {}
-    for p in passes.values():
+    for _, _, p in passes:
         funding.update(p["funding"])
         academic.update(p["academic"])
     print(f"\n  [justification] writing {len(finals)} ...")
@@ -365,7 +413,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         a = align.get(gi)
         p = partner.get(gi)
         return {
-            "rank": rank, "company": c["company"], "justification": just.get(gi),
+            "rank": rank, "company": c["company"], "size": tier[gi],
+            "justification": just.get(gi),
             "sector_match": sectors[gi] or None, "website": c.get("website"),
             "distance_miles": c.get("distance_miles"), "employees": c.get("employees"),
             "revenue_usdmm": c.get("revenue_usdmm"),
@@ -382,7 +431,7 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         }
 
     tabs = {}
-    for title, p in passes.items():
+    for title, _, p in passes:
         rows = []
         for rank, gi in enumerate(p["final"], start=1):
             r = row(gi, rank)
@@ -390,18 +439,21 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
             rows.append(r)
         tabs[title] = rows
 
-    # All Companies: every company, from the widest pass
-    widest = pass_b or pass_a
+    # All Companies: every company, from the widest pass of its size tier
+    widest = {}
+    for _, t, p in passes:
+        widest[t] = p          # later passes of a tier are the wider ones
     final_n, cutoff = cfg.funnel["final_top_n"], cfg.funnel["secondary_cutoff"]
-    rank_of = {gi: k for k, gi in enumerate(widest["final"], start=1)}
-    sec_set, cand_set, in_a = set(widest["secondary"]), set(widest["candidates"]), set(cand_a)
+    in_a = set(cand_a)
 
-    def stage_of(gi):
-        if gi in rank_of:
+    def stage_of(gi, w):
+        if w is None:
+            return "Not scored"
+        if gi in w["rank"]:
             return f"Top {final_n}"
-        if gi in sec_set:
+        if gi in w["sec"]:
             return f"Secondary scored (top {cutoff})"
-        if gi in cand_set:
+        if gi in w["cand"]:
             if align.get(gi, {}).get("reason") == NO_TEXT_REASON:
                 return "Not scored (no description)"
             return "Alignment scored"
@@ -409,20 +461,27 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
             return "Not scored (no description)"
         return "Filtered out (pre-filter)"
 
+    info = {t: {"rank": {gi: k for k, gi in enumerate(p["final"], start=1)},
+                "sec": set(p["secondary"]), "cand": set(p["candidates"]), "p": p}
+            for t, p in widest.items()}
+
     def sort_key(gi):
-        if gi in rank_of:
-            return (0, rank_of[gi])
-        if gi in cand_set:
-            return (1, -widest["prelim"][gi])
-        return (2, gi)
+        w = info.get(tier[gi])
+        order = TIERS.index(tier[gi])
+        if w and gi in w["rank"]:
+            return (order, 0, w["rank"][gi])
+        if w and gi in w["cand"]:
+            return (order, 1, -w["p"]["prelim"][gi])
+        return (order, 2, gi)
 
     all_rows = []
     for gi in sorted(range(n), key=sort_key):
-        r = row(gi, rank_of.get(gi))
-        r["stage"] = stage_of(gi)
-        r["in_prefilter"] = "Yes" if gi in in_a else "No"
-        r["overall_score"] = widest["overall"].get(gi)
-        if gi not in sec_set:
+        w = info.get(tier[gi])
+        r = row(gi, w["rank"].get(gi) if w else None)
+        r["stage"] = stage_of(gi, w)
+        r["in_prefilter"] = ("Yes" if gi in in_a else "No") if tier[gi] == "Small" else "All scored"
+        r["overall_score"] = w["p"]["overall"].get(gi) if w else None
+        if not w or gi not in w["sec"]:
             r["partnership_score"] = r["partnership_reason"] = None
         all_rows.append(r)
 
@@ -433,9 +492,12 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         "scoring_model": cfg.openai["scoring_model"],
         "embedding_model": cfg.openai["embedding_model"],
         "n_companies": n,
-        "n_candidates": len(cand_a),
-        "n_full": len(pass_b["candidates"]) if pass_b else None,
-        "secondary_cutoff": cutoff,
+        "size_tiers": ", ".join(f"{t}: {len(members[t]):,}" for t in TIERS)
+                      + f" (Small = under {_money(tiers_cfg['small_below'])} or revenue "
+                      f"unknown; Large = {_money(tiers_cfg['large_from'])} and above)",
+        "n_candidates": f"{len(cand_a)} small companies",
+        "n_full": "; ".join(f"{title}: {len(p['candidates']):,}" for title, _, p in passes),
+        "secondary_cutoff": f"{cutoff} per tab",
         "weights": cfg.weights,
     }
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -514,15 +576,21 @@ def main() -> int:
     full = not args.no_full and cfg.prefilter.get("full_run", True)
 
     if args.dry_run:
+        tiers_cfg = cfg.raw.get("size_tiers") or {"small_below": 100, "large_from": 1000}
+        tier = [size_tier(c.get("revenue_usdmm"), tiers_cfg) for c in companies]
+        has = [bool(company_text(c)) for c in companies]
         top_n = cfg.prefilter["top_n_candidates"] if cfg.prefilter["enabled"] else 0
-        n_cand = min(top_n, len(companies)) if top_n else len(companies)
-        n_text = sum(1 for c in companies if company_text(c))
-        n_full = (n_text if not args.sample else min(n_text, n_cand + args.sample)) if full else 0
-        sec = cfg.funnel["secondary_cutoff"]
-        print(f"\n[dry-run] Per faculty: ~{n_cand} alignment calls (pre-filter pass)"
-              + (f" + up to ~{max(0, n_full - n_cand):,} more (no pre-filter pass)" if full else "")
-              + f" + up to {2 * sec} partnership + {2 * cfg.funnel['final_top_n']} "
-              "justification calls, minus cache hits.")
+        n_small = sum(1 for t in tier if t == "Small")
+        n_small_text = sum(1 for t, h in zip(tier, has) if t == "Small" and h)
+        n_cand = min(top_n, n_small) if top_n else n_small
+        n_ml = sum(1 for t, h in zip(tier, has) if t != "Small" and h)
+        extra = (min(n_small_text, n_cand + args.sample) if args.sample else n_small_text) - n_cand
+        print(f"\n[dry-run] Size tiers: " + ", ".join(
+            f"{t} {sum(1 for x in tier if x == t):,}" for t in TIERS))
+        print(f"[dry-run] Alignment calls: ~{n_cand} small (pre-filter) + {n_ml} mid/large"
+              + (f" + up to ~{max(0, extra):,} more small (no pre-filter)" if full else "")
+              + f"; up to {cfg.funnel['secondary_cutoff']} partnership and "
+              f"{cfg.funnel['final_top_n']} justification calls per tab; minus cache hits.")
         print("[dry-run] No API was called.")
         return 0
 

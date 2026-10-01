@@ -219,7 +219,7 @@ class TestOutputWorkbook(unittest.TestCase):
             self.assertEqual(ws.cell(2, 2).value, "Catalyst Works LLC")
             hdr = [c.value for c in ws[1]]
             self.assertEqual(ws.cell(2, hdr.index("Overall Score") + 1).value, 0.7123)
-            self.assertEqual(hdr[2], "Justification")
+            self.assertEqual(hdr[2:4], ["Size", "Justification"])
 
     def test_one_tab_per_pass(self):
         faculty, results, all_rows, run_info = self._sample()

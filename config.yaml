@@ -72,6 +72,13 @@ prefilter:
   # with a description) and give it its own output tab; --no-full skips it
   full_run: true
 
+# --------- Company size tiers (revenue, $USDmm) ----------------------
+# Each faculty's output ranks companies separately per tier, one tab each.
+# Small = under small_below, or no revenue figure; Large = large_from and up.
+size_tiers:
+  small_below: 100
+  large_from: 1000
+
 # --------- Scoring funnel --------------------------------------------
 funnel:
   secondary_cutoff: 40    # top-N companies that get partnership/funding scoring

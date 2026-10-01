@@ -13,9 +13,9 @@ from tests.harness import FakeOpenAI, TempProject, install_fake_openai
 
 
 def top_sheet(path, which="all companies"):
-    """The Top Matches tab of one pass ('pre-filter' or 'all companies')."""
+    """The Small-companies tab of one pass ('pre-filter' or 'all companies')."""
     wb = openpyxl.load_workbook(path)
-    name = next(n for n in wb.sheetnames if n.startswith("Top Matches") and which in n)
+    name = next(n for n in wb.sheetnames if n.startswith("Small") and which in n)
     return wb[name]
 
 
@@ -50,7 +50,7 @@ class TestFullRun(PipelineTestCase):
             self.assertIn("Ioulia Valla", outputs[0].name)
 
             wb = openpyxl.load_workbook(outputs[0])
-            self.assertTrue(any(n.startswith("Top Matches") for n in wb.sheetnames))
+            self.assertTrue(any(n.startswith("Small") for n in wb.sheetnames))
             self.assertIn("All Companies", wb.sheetnames)
             self.assertIn("Run Info", wb.sheetnames)
         finally:
@@ -288,8 +288,8 @@ class TestPrefilterActivation(PipelineTestCase):
             self.assertEqual(counts.get("alignment", 0), 7)
             self.assertEqual(counts.get("embedding", 0), 1, "faculty profile embedded once")
             wb = openpyxl.load_workbook(p.outputs()[0])
-            self.assertIn("Top Matches - 3 pre-filter", wb.sheetnames)
-            self.assertIn("Top Matches - all companies", wb.sheetnames)
+            self.assertIn("Small - 3 pre-filter", wb.sheetnames)
+            self.assertIn("Small - all companies", wb.sheetnames)
             ws = wb["All Companies"]
             inpf = column(ws, "In 300 Pre-filter")
             self.assertEqual([ws.cell(r, inpf).value for r in range(2, ws.max_row + 1)].count("Yes"), 3)
@@ -302,11 +302,13 @@ class TestPrefilterActivation(PipelineTestCase):
             p.run_enrich()
             FakeOpenAI.reset()
             p.run_match(["--no-full"])
-            self.assertEqual(FakeOpenAI.counts().get("alignment", 0), 3, "only candidates scored")
+            # 3 small candidates + the 2 mid-size companies (always all scored)
+            self.assertEqual(FakeOpenAI.counts().get("alignment", 0), 5)
             ws = openpyxl.load_workbook(p.outputs()[0])["All Companies"]
             stages = [ws.cell(r, 1).value for r in range(2, ws.max_row + 1)]
+            # 6 small companies, 3 of them candidates
             self.assertEqual(stages.count("Filtered out (pre-filter)")
-                             + stages.count("Not scored (no description)"), 5)
+                             + stages.count("Not scored (no description)"), 3)
         finally:
             p.__exit__()
 
@@ -381,3 +383,54 @@ class TestRobustness(PipelineTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSizeTiers(PipelineTestCase):
+    """Fixture revenues: Polymer Materials $210m and Quiet Insurance $450m
+    are Mid; everything else is under $100m or unknown, so Small."""
+
+    def test_each_tier_ranked_in_its_own_tab(self):
+        p = self._prepared()
+        try:
+            p.run_enrich()
+            p.run_match()
+            wb = openpyxl.load_workbook(p.outputs()[0])
+            self.assertEqual(wb.sheetnames, ["Small - all companies", "Mid ($100m-$1bn)",
+                                             "All Companies", "Run Info"])
+            mid = {wb["Mid ($100m-$1bn)"].cell(r, 2).value
+                   for r in range(2, wb["Mid ($100m-$1bn)"].max_row + 1)}
+            self.assertEqual(mid, {"Polymer Materials Corp.", "Quiet Insurance Group"})
+            small = top_sheet(p.outputs()[0])
+            names = {small.cell(r, 2).value for r in range(2, small.max_row + 1)}
+            self.assertFalse(names & mid)
+            self.assertIn("Unknown Holdings Inc.", {
+                wb["All Companies"].cell(r, 3).value
+                for r in range(2, wb["All Companies"].max_row + 1)
+                if wb["All Companies"].cell(r, 4).value == "Small"})
+        finally:
+            p.__exit__()
+
+    def test_thresholds_come_from_config(self):
+        p = self._prepared(config_overrides={"size_tiers": {"small_below": 50,
+                                                            "large_from": 200}})
+        try:
+            p.run_enrich()
+            p.run_match()
+            wb = openpyxl.load_workbook(p.outputs()[0])
+            self.assertIn("Mid ($50m-$200m)", wb.sheetnames)     # Pyro Energy $55m
+            self.assertIn("Large ($200m+)", wb.sheetnames)       # Polymer, Quiet
+        finally:
+            p.__exit__()
+
+
+class TestSizeTierRule(unittest.TestCase):
+    def test_rule(self):
+        from match_faculty import size_tier
+        cfg = {"small_below": 100, "large_from": 1000}
+        self.assertEqual(size_tier(None, cfg), "Small")          # unknown = small
+        self.assertEqual(size_tier(float("nan"), cfg), "Small")
+        self.assertEqual(size_tier(99.9, cfg), "Small")
+        self.assertEqual(size_tier(100, cfg), "Mid")
+        self.assertEqual(size_tier(999, cfg), "Mid")
+        self.assertEqual(size_tier(1000, cfg), "Large")
+        self.assertEqual(size_tier(97929, cfg), "Large")

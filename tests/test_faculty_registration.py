@@ -73,9 +73,9 @@ class TestRunByRow(unittest.TestCase):
             self.assertEqual(len(out), 1)
             self.assertIn("Julie Burland", out[0].name)
             wb = openpyxl.load_workbook(out[0])
-            self.assertEqual(wb.sheetnames[:2], ["Top Matches - 3 pre-filter",
-                                                  "Top Matches - all companies"])
-            for name in wb.sheetnames[:2]:
+            self.assertEqual(wb.sheetnames[:3], ["Small - 3 pre-filter",
+                                                  "Small - all companies", "Mid ($100m-$1bn)"])
+            for name in wb.sheetnames[:3]:
                 ws = wb[name]
                 hdr = [c.value for c in ws[1]]
                 j = hdr.index("Justification") + 1
