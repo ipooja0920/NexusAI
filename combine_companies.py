@@ -353,6 +353,31 @@ def _distinct(values) -> list:
     return out
 
 
+def name_keys(name) -> set:
+    """Lookup keys for a name: its normalised form, and the same without the
+    words the matching rule ignores (a country: "Aetna Ireland Inc.",
+    "Anchiano Therapeutics Israel Ltd."). Only finds candidates - the
+    matching rule still decides whether they are the same company."""
+    keys = {normalise_company_name(name),
+            normalise_company_name(name_parts(name)[0])}
+    return {k for k in keys if k}
+
+
+def all_name_keys(names) -> set:
+    """name_keys of every name a source company has used (a renamed
+    company is found under its old name as well as its new one)."""
+    return set().union(*(name_keys(n) for n in set(names) if isinstance(n, str)))
+
+
+def name_index(data: dict) -> dict:
+    """lookup key -> [source company keys]."""
+    by_name = defaultdict(list)
+    for key, s in data.items():
+        for k in s.get("keys") or ({s["norm"]} if s.get("norm") else set()):
+            by_name[k].append(key)
+    return by_name
+
+
 def summarise_sbir(path: Path) -> dict:
     """key -> summary. Key is the UEI, or the normalised name for older
     companies that never had one."""
@@ -366,7 +391,11 @@ def summarise_sbir(path: Path) -> dict:
     a["number_employees"] = pd.to_numeric(a["number_employees"], errors="coerce")
     a["award_year"] = pd.to_numeric(a["award_year"], errors="coerce")
     a["norm"] = a["company"].map(normalise_company_name)
-    a["key"] = a["uei"].where(a["uei"].fillna("") != "", "NAME:" + a["norm"])
+    # no UEI (older awards): one company per NAME as the matching rule reads
+    # it - legal form included, so "PHT Corporation" (Boston) and "PHT,
+    # Inc." (Pittsburgh) stay two companies
+    a["key"] = a["uei"].where(a["uei"].fillna("") != "",
+                             "NAME:" + a["company"].map(ct_key))
     # newest award first within each company (stable, so the file order
     # breaks ties): titles, abstracts and the headcount all read from it
     a = a.sort_values(["key", "award_year", "contract_end_date"],
@@ -391,6 +420,7 @@ def summarise_sbir(path: Path) -> dict:
         out[key] = {
             "name": g["company"].iloc[0],
             "norm": g["norm"].iloc[0],
+            "keys": all_name_keys(g["company"]),
             "states": {s for s in g["state"].map(state_code) if s},
             "domains": {d for d in g["company_website"].map(website_domain) if d},
             "exacts": set(g["company"].map(name_parts)),
@@ -415,11 +445,9 @@ def summarise_sbir(path: Path) -> dict:
 
 
 def build_indexes(sbir: dict) -> tuple:
-    by_name = defaultdict(list)
+    by_name = name_index(sbir)
     by_domain = defaultdict(set)
     for key, s in sbir.items():
-        if s["norm"]:
-            by_name[s["norm"]].append(key)
         for d in s["domains"]:
             by_domain[d].add(key)
     # a domain shared by several SBIR companies identifies none of them
@@ -473,6 +501,10 @@ def summarise_formd(path: Path, recent_from) -> dict:
         out[cik] = {
             "name": g["company"].iloc[0],
             "norm": g["norm"].iloc[0],
+            # every name this CIK has filed under, so a company Capital IQ
+            # still lists by its old name is found (Durin Technologies ->
+            # Durin Life Sciences)
+            "keys": all_name_keys(g["company"]),
             "states": {s for s in g["state"].map(state_code) if s},
             "exacts": set(g["company"].map(name_parts)),
             "zips": {z for z in g["zip"].map(zip5) if z},
@@ -533,6 +565,9 @@ def summarise_ctgov(path: Path) -> dict:
                              "phase_number", "start_year", "conditions",
                              "intervention_types", "partners"])
     c = c[c["status"] != "WITHDRAWN"].copy()
+    # a few condition names arrive HTML-escaped ("Parkinson&#39; s Disease")
+    c["conditions"] = c["conditions"].map(
+        lambda v: html.unescape(v) if isinstance(v, str) else v)
     c["is_active"] = c["is_active"].astype(str).str.lower() == "true"
     c["key"] = c["company"].map(ct_key)
     c = c[c["key"] != ""]
@@ -551,6 +586,7 @@ def summarise_ctgov(path: Path) -> dict:
         out[key] = {
             "name": name,
             "norm": normalise_company_name(name),
+            "keys": all_name_keys(g["company"]),
             "exacts": {name_parts(name)},
             "domains": set(), "zips": set(),             # none in trial records
             "ct_university_current": current,
@@ -607,6 +643,7 @@ def summarise_openalex(path: Path) -> dict:
         out[key] = {
             "name": name,
             "norm": normalise_company_name(name),
+            "keys": all_name_keys(g["company"]),
             "exacts": {name_parts(n) for n in g["company"]},
             "domains": {d for d in g["website"].map(website_domain) if d},
             "zips": set(),                                  # OpenAlex has no ZIP
@@ -769,7 +806,8 @@ def match_company(name, website, address, data, by_name, by_domain=None) -> tupl
     key = normalise_company_name(name)
     our_domain = website_domain(website)
     our_zip = zip_from_address(address)
-    cands = by_name.get(key, []) if key else []
+    cands = list(dict.fromkeys(k for nk in name_keys(name)
+                               for k in by_name.get(nk, [])))
 
     same = [k for k in cands if any(same_name(ours, t) for t in data[k]["exacts"])]
     if len(same) == 1 and not is_too_generic(key):
@@ -861,10 +899,7 @@ def main() -> int:
                                                           "2025-01-01")
         formd = summarise_formd(formd_path, recent_from)
         print(f"  Form D companies       {len(formd):>7,}   (recent money from {recent_from})")
-        fd_by_name = defaultdict(list)
-        for k, v in formd.items():
-            if v["norm"]:
-                fd_by_name[v["norm"]].append(k)
+        fd_by_name = name_index(formd)
         for i, row in raw.iterrows():
             k, how, note = match_formd(row[name_col], row[addr_col], formd, fd_by_name)
             fd_counts[how] += 1
@@ -925,10 +960,7 @@ def main() -> int:
     if ct_path.exists():
         ct = summarise_ctgov(ct_path)
         print(f"  ClinicalTrials.gov companies {len(ct):>7,}")
-        ct_by_name = defaultdict(list)
-        for k, v in ct.items():
-            if v["norm"]:
-                ct_by_name[v["norm"]].append(k)
+        ct_by_name = name_index(ct)
         for i, row in raw.iterrows():
             # no website or address in trial records: only a same name matches
             k, how, note = match_company(row[name_col], None, None, ct, ct_by_name)
@@ -953,10 +985,8 @@ def main() -> int:
     if oa_path.exists():
         oa = summarise_openalex(oa_path)
         print(f"  OpenAlex companies     {len(oa):>7,}")
-        oa_by_name, oa_by_domain = defaultdict(list), defaultdict(set)
+        oa_by_name, oa_by_domain = name_index(oa), defaultdict(set)
         for k, v in oa.items():
-            if v["norm"]:
-                oa_by_name[v["norm"]].append(k)
             for d in v["domains"]:
                 oa_by_domain[d].add(k)
         oa_by_domain = {d: next(iter(k)) for d, k in oa_by_domain.items() if len(k) == 1}

@@ -195,6 +195,17 @@ class TestAcademicAdjustment(unittest.TestCase):
         self.assertAlmostEqual(adj, 0.15 - 0.05)
         self.assertIn("current clinical-trial university partner", reason)
 
+    def test_true_false_read_back_as_numbers(self):
+        """pandas reads a True/False column with blanks as 1.0 / 0.0 - the
+        flags must still count (they were silently ignored)."""
+        row = {"oa_funded_university": 1.0, "oa_coauthored_university": 1.0,
+               "sbir_awarded": "No"}
+        self.assertAlmostEqual(company_academic_adjustment(row, ACA)[0], 0.15)
+        self.assertEqual(company_academic_adjustment(
+            {"oa_funded_university": 0.0, "oa_coauthored_university": 0.0}, ACA)[0], 0.0)
+        self.assertEqual(company_funding_score(
+            {"oa_funded_university": 1.0, "oa_last_funded_year": 2025.0}, CFG)[0], 1.0)
+
     def test_nothing_known(self):
         self.assertEqual(company_academic_adjustment({"university_past": float("nan")}, ACA),
                          (0.0, "No academic track record found."))

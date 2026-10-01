@@ -159,8 +159,14 @@ def funding_columns(key: str, caches: dict) -> dict:
 
 
 def _yes(value) -> bool:
-    """True for True / "True" / "Yes" (Excel and pandas spell it all ways)."""
-    return str(value).strip().lower() in ("true", "yes", "1")
+    """True for True / "True" / "Yes" / 1 (Excel and pandas spell it all
+    ways). pandas reads a True/False column that has blanks as 1.0 / 0.0 /
+    NaN - and str(1.0) is "1.0", which a plain text check misses."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    return str(value).strip().lower() in ("true", "yes", "1", "1.0")
 
 
 def _num_or_none(value):

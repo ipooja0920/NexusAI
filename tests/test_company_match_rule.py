@@ -15,7 +15,7 @@ from __future__ import annotations
 import unittest
 from collections import defaultdict
 
-from combine_companies import match_company
+from combine_companies import all_name_keys, match_company, name_index
 from nexus.matching import (name_parts, normalise_company_name, same_name,
                             zip5, zip_from_address)
 
@@ -99,14 +99,15 @@ def addr(zipcode):
 
 def source(*companies):
     """companies: (key, name, domains, zips) -> (data, by_name, by_domain)."""
-    data, by_name, by_domain = {}, defaultdict(list), {}
+    data, by_domain = {}, {}
     for key, name, domains, zips in companies:
-        data[key] = {"name": name, "exacts": {name_parts(name)},
+        names = name if isinstance(name, list) else [name]   # a renamed company
+        data[key] = {"name": names[-1], "exacts": {name_parts(n) for n in names},
+                     "keys": all_name_keys(names),
                      "domains": set(domains), "zips": set(zips)}
-        by_name[normalise_company_name(name)].append(key)
         for d in domains:
             by_domain[d] = key
-    return data, by_name, by_domain
+    return data, name_index(data), by_domain
 
 
 class TestRule(unittest.TestCase):
@@ -190,6 +191,24 @@ class TestRule(unittest.TestCase):
         self.assertEqual(self.match("NewName Bio, Inc.", "oldname.com", None,
                                     ("k", "OLDNAME INC", ["oldname.com"], [])),
                          ("k", "website"))
+
+    def test_country_in_either_name_is_ignored(self):
+        """'Anchiano Therapeutics Israel Ltd.' (trial sponsor) is Capital IQ's
+        'Anchiano Therapeutics Ltd.' - the country word is not the name."""
+        self.assertEqual(self.match("Anchiano Therapeutics Ltd.", None, None,
+                                    ("k", "Anchiano Therapeutics Israel Ltd.", [], [])),
+                         ("k", "name"))
+        self.assertEqual(self.match("Anchiano Therapeutics Israel Ltd.", None, None,
+                                    ("k", "Anchiano Therapeutics Ltd.", [], [])),
+                         ("k", "name"))
+
+    def test_renamed_company_found_by_its_old_name(self):
+        """Form D: one CIK filed as Durin Technologies, then Durin Life
+        Sciences. Capital IQ still lists the old name."""
+        self.assertEqual(self.match("Durin Technologies, Inc.", None, None,
+                                    ("cik", ["Durin Technologies, Inc.",
+                                             "Durin Life Sciences, Inc."], [], [])),
+                         ("cik", "name"))
 
     def test_no_match(self):
         self.assertEqual(self.match("Nobody Inc", "nobody.com", "06269",

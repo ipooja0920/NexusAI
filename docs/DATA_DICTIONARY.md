@@ -55,7 +55,10 @@ Added after the SBIR block. From `data/cache/formd_clean.csv`.
 Form D has no website, so a similar (not identical) name can only be confirmed by **ZIP code**.
 Filings are grouped by **CIK** (SEC's company ID), so a company that renamed
 itself keeps all its raises — Liberation Labs Holdings → Liberation
-Bioindustries.
+Bioindustries. A CIK is found under **every name it has filed under**, so a
+company Capital IQ still lists by its old name is matched too (Durin
+Technologies → Durin Life Sciences; `formd_match_name` shows the newest
+name).
 
 ### New fields — SEC XBRL
 
@@ -138,6 +141,12 @@ One rule for SBIR and Form D:
    - not confirmed → nothing attached, `unconfirmed`, candidate shown
 3. **Website only (SBIR)** — no name matches, but the website belongs to
    exactly one SBIR company: a rename (`website`).
+
+A source company is looked up under every name it has used and with country
+words removed, on both sides (*Anchiano Therapeutics Ltd. = Anchiano
+Therapeutics Israel Ltd.*). SBIR awards with no UEI (older ones) are grouped
+into companies by the same name rule, legal form included — *PHT Corporation
+(Boston) and PHT, Inc. (Pittsburgh) are two companies*.
 
 A **very short name** ("Meta, Inc.", "PCT, LLC", "SST Corporation") counts as
 similar even when identical, and must be confirmed too — Meta, Inc. on Long

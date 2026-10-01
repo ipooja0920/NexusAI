@@ -135,6 +135,11 @@ def main() -> int:
     print(f"Reading combined file: {combined_path}")
     df = pd.read_excel(combined_path, sheet_name="Companies")
     df = df.astype(object).where(df.notna(), None)
+    # pandas reads a True/False column with blanks as 1.0 / 0.0 - put the
+    # True / False back, so the sheet reads as the combined file does
+    for col in ("oa_funded_university", "oa_coauthored_university"):
+        if col in df.columns:
+            df[col] = df[col].map(lambda v: None if v is None else bool(v))
     n = len(df)
     if n == 0:
         print("ERROR: No companies found in the combined file.")
