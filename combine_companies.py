@@ -109,8 +109,8 @@ MATCHING - one rule for SBIR and Form D (match_company below):
   3. WEBSITE ONLY (SBIR) -> no name matches, but the website belongs to
      exactly one SBIR company: a rename                    ("website")
 
-  A very short name ("Meta, Inc.", "PCT, LLC") counts as similar even when
-  identical - it must be confirmed too. Two companies of the same name
+  A name of 3 characters or fewer ("PCT, LLC", "HSS, Inc.", "X9, Inc.")
+  counts as similar even when identical - it must be confirmed too. Two companies of the same name
   (namesakes) are told apart by website / ZIP; if nothing picks one, the
   row is "ambiguous". Form D has no websites, so only ZIP can confirm.
 
@@ -162,7 +162,7 @@ import pandas as pd
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.utils import column_index_from_string
 
-from nexus.matching import (is_too_generic, name_parts, same_name,
+from nexus.matching import (name_parts, same_name,
                             normalise_company_name, state_code,
                             website_domain, zip5, zip_from_address)
 from nexus.settings import Settings
@@ -351,6 +351,16 @@ def _distinct(values) -> list:
             seen.add(v)
             out.append(v)
     return out
+
+
+# an identical name this short (an acronym) must still be confirmed
+SHORT_NAME_MAX = 3
+
+
+def too_short(key: str) -> bool:
+    """True for a name of SHORT_NAME_MAX characters or fewer, spaces aside
+    ("pct", "hss", "x9") - too many unrelated companies share it."""
+    return len(key.replace(" ", "")) <= SHORT_NAME_MAX
 
 
 def name_keys(name) -> set:
@@ -797,10 +807,11 @@ def match_company(name, website, address, data, by_name, by_domain=None) -> tupl
       3. WEBSITE ONLY - no name matches, but the website belongs to exactly
          one company in the source (a rename)               -> "website"
 
-    One exception to step 1: a very short name ("Meta, Inc.", "PCT, LLC",
-    "SST Corporation") is shared by many unrelated companies, so even an
-    identical name must be confirmed by website or ZIP. (Meta, Inc. on Long
-    Island is not the SBIR "Meta" in San Jose.)
+    One exception to step 1: a name of 3 characters or fewer - an acronym
+    ("PCT, LLC", "SST Corporation", "HSS, Inc.") - is shared by many
+    unrelated companies, so even an identical name must be confirmed by
+    website or ZIP. Any longer identical name is the same company
+    ("Abyrx, Inc.", "Eisai Inc.", "Noom, Inc.").
     """
     ours = name_parts(name)
     key = normalise_company_name(name)
@@ -810,7 +821,7 @@ def match_company(name, website, address, data, by_name, by_domain=None) -> tupl
                                for k in by_name.get(nk, [])))
 
     same = [k for k in cands if any(same_name(ours, t) for t in data[k]["exacts"])]
-    if len(same) == 1 and not is_too_generic(key):
+    if len(same) == 1 and not too_short(key):
         return same[0], "name", None
 
     def confirmed(k):

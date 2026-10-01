@@ -148,9 +148,10 @@ Therapeutics Israel Ltd.*). SBIR awards with no UEI (older ones) are grouped
 into companies by the same name rule, legal form included — *PHT Corporation
 (Boston) and PHT, Inc. (Pittsburgh) are two companies*.
 
-A **very short name** ("Meta, Inc.", "PCT, LLC", "SST Corporation") counts as
-similar even when identical, and must be confirmed too — Meta, Inc. on Long
-Island is not the SBIR "Meta" in San Jose. **Namesakes** (two companies with
+A name of **3 characters or fewer** — an acronym ("PCT, LLC", "SST
+Corporation", "HSS, Inc.") — counts as similar even when identical, and must
+be confirmed too. Any longer identical name is the same company ("Abyrx,
+Inc.", "Eisai Inc.", "Noom, Inc."). **Namesakes** (two companies with
 the same name) are told apart by website or ZIP; if nothing picks one, the
 row is `ambiguous`.
 

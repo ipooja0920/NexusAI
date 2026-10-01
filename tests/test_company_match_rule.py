@@ -6,7 +6,7 @@ to Capital IQ (combine_companies.match_company, nexus.matching.name_parts):
   2. only a similar name (Holdings / Group / ... differ, or LLC vs Inc)
      -> matched only if the websites match, or, with no website to compare,
      the ZIP codes match
-  3. very short names count as similar - they must be confirmed too
+  3. names of 3 characters or fewer count as similar - they must be confirmed too
 
 The cases are the real ones that decided the rule.
 """
@@ -157,14 +157,21 @@ class TestRule(unittest.TestCase):
                          (None, "unconfirmed"))
 
     # 3. short names
-    def test_short_same_name_needs_confirmation(self):
-        """Meta, Inc. on Long Island is not the SBIR 'Meta, Inc.' in San Jose."""
-        self.assertEqual(self.match("Meta, Inc.", None, "11530",
-                                    ("k", "META INC", [], ["95125"])),
+    def test_acronym_same_name_needs_confirmation(self):
+        """3 characters or fewer: HSS, Inc. in New York is not every HSS."""
+        self.assertEqual(self.match("HSS, Inc.", None, "10021",
+                                    ("k", "HSS INC", [], ["80112"])),
                          (None, "unconfirmed"))
-        self.assertEqual(self.match("Meta, Inc.", None, "95125",
-                                    ("k", "META INC", [], ["95125"])),
+        self.assertEqual(self.match("HSS, Inc.", None, "80112",
+                                    ("k", "HSS INC", [], ["80112"])),
                          ("k", "name+address"))
+
+    def test_short_but_not_acronym_same_name_matches(self):
+        """Your rule: an identical name is the same company."""
+        self.assertEqual(self.match("Abyrx, Inc.", None, None,
+                                    ("k", "Abyrx, Inc.", [], [])), ("k", "name"))
+        self.assertEqual(self.match("Eisai Inc.", None, None,
+                                    ("k", "Eisai Inc.", [], [])), ("k", "name"))
 
     def test_missing_legal_form_needs_confirmation(self):
         self.assertEqual(self.match("Abceutics Inc.", None, "02139",
