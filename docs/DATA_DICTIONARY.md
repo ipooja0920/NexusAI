@@ -324,11 +324,51 @@ Settings in `config.yaml`.
 | funding_reason | The evidence behind it |
 | academic_adjustment | Added to the partnership score at match time: +0.10 funded university papers, +0.05 each past SBIR university partner / past trial partner / co-wrote with universities, +0.03 any SBIR award (bonus capped at +0.15); −0.05 each current SBIR or trial university partner (capped at −0.10). Running trials: no penalty (switchable in config) |
 | academic_reason | Which of those applied |
-| research_focus | OpenAlex topics, trial conditions and the 3 newest SBIR project titles — added to the description for the embedding and the AI alignment and partnership scoring |
+| research_focus | OpenAlex topics, trial conditions and the 3 newest SBIR project titles (kept for reference) |
+| company_profile | **What the matching reads about the company.** For the ~2,000 companies with SBIR, ClinicalTrials.gov or OpenAlex text: an AI-written ~150-word profile from the Capital IQ description + SBIR titles and abstracts (newest first, first 6,000 characters) + trial conditions and treatment types + OpenAlex topics — facts from those sources only, no people's names, no dollar amounts. Everyone else: the Capital IQ description. Embedded for the pre-filter and read by the alignment, partnership and justification prompts. Cached in `data/cache/company_profiles.json` |
+| profile_from | `AI: Capital IQ description + sources`, `Capital IQ description`, or `Capital IQ description + research focus` (an AI profile could not be written) |
 
 Final score (`match_faculty.py`, weights unchanged): alignment 30%, distance
 25%, partnership 15% (AI score + academic_adjustment), revenue 15%, funding
 10%, employees 5%.
+
+---
+
+## 8. Faculty match workbook — `data/output/<Name> Match <date>.xlsx`
+
+Faculty come from the **BD-IFR Faculty Registration** export
+(`data/input/BDIFR Faculty Registration From-documents.csv`, run one with
+`--row N` — header = row 1 — or `--faculty "Name"`), or the old Faculty
+Database (Flag = N). From the form the matching uses: keywords, research
+description, nature of research, primary and secondary industry sector, and
+the "anything else" note (industry interests). Emails, IDs, years in post and
+workflow fields are never read. The profile used is in **Run Info**.
+
+Two passes, one tab each:
+
+| Tab | What was AI-scored for alignment |
+|---|---|
+| Top Matches - 300 pre-filter | the 300 companies closest to the research profile by embedding similarity |
+| Top Matches - all companies | every company with a description (~19,800; ~1,900 have none) |
+
+In each: the top 40 by preliminary score (distance, size, alignment) get
+the partnership score, then the final score picks the top 20.
+
+| Column | Meaning |
+|---|---|
+| Justification | 2–3 sentences: which of the researcher's keywords / problems / methods the company's work touches, then distance, size, money and university record as far as the figures support |
+| Overall Score | Final weighted score (above) |
+| Sector Match | `Primary sector` / `Secondary sector`: the company's Capital IQ industry group is the one the researcher named. Capital IQ here holds only two industry groups (Health Care Equipment and Services; Pharmaceuticals, Biotechnology and Life Sciences) |
+| Alignment Score (1-9), Reason | AI: research ↔ company profile |
+| Partnership Score (1-9), Reason | AI: how likely to partner, plus the academic track record |
+| Funding Score (0-1), Reason | From the enriched sheet |
+| Company Profile | The text the AI read |
+
+**All Companies** lists every company from the all-companies pass with its
+stage, `In 300 Pre-filter` (Yes/No) and scores. Alignment scores are cached
+(`data/cache/alignment_scores.json`), so an interrupted run resumes and the
+second pass reuses the first pass's 300 scores. Partnership scores are cached
+per company and profile text, shared by every faculty.
 
 ---
 

@@ -16,6 +16,8 @@
 paths:
   companies_raw: data/input/companies_raw.xlsx       # Capital IQ export (you provide)
   faculty_database: data/input/Faculty Database.xlsx # faculty list with Flag column
+  # BD-IFR Faculty Registration form export: run one with --row N or --faculty
+  faculty_registration: data/input/BDIFR Faculty Registration From-documents.csv
   companies_combined: data/companies_combined.xlsx   # raw + source data, built by combine_companies.py
   companies_enriched: data/companies_enriched.xlsx   # built by enrich_companies.py
   sources_dir: data/sources                          # downloaded reference data
@@ -57,12 +59,18 @@ openai:
   embedding_model: text-embedding-3-small
   max_retries: 3
   rate_limit_seconds: 0.0     # pause between scoring calls (0 = none)
+  concurrency: 16             # AI calls in flight at once (lower it if you
+                              # hit OpenAI rate-limit errors)
+  profile_model:              # model for the company profiles; blank = scoring_model
 
 # --------- Pre-filter (embedding similarity) -------------------------
 prefilter:
   enabled: true
   top_n_candidates: 300   # companies passed to LLM scoring per faculty
                           # set to 0 to disable and score ALL companies
+  # also run a second pass WITHOUT the pre-filter (AI-scores every company
+  # with a description) and give it its own output tab; --no-full skips it
+  full_run: true
 
 # --------- Scoring funnel --------------------------------------------
 funnel:

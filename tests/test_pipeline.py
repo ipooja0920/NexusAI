@@ -12,6 +12,18 @@ import openpyxl
 from tests.harness import FakeOpenAI, TempProject, install_fake_openai
 
 
+def top_sheet(path, which="all companies"):
+    """The Top Matches tab of one pass ('pre-filter' or 'all companies')."""
+    wb = openpyxl.load_workbook(path)
+    name = next(n for n in wb.sheetnames if n.startswith("Top Matches") and which in n)
+    return wb[name]
+
+
+def column(ws, header):
+    """1-based column number of a header."""
+    return [c.value for c in ws[1]].index(header) + 1
+
+
 class PipelineTestCase(unittest.TestCase):
     def setUp(self):
         install_fake_openai()
@@ -38,7 +50,7 @@ class TestFullRun(PipelineTestCase):
             self.assertIn("Ioulia Valla", outputs[0].name)
 
             wb = openpyxl.load_workbook(outputs[0])
-            self.assertIn("Top Matches", wb.sheetnames)
+            self.assertTrue(any(n.startswith("Top Matches") for n in wb.sheetnames))
             self.assertIn("All Companies", wb.sheetnames)
             self.assertIn("Run Info", wb.sheetnames)
         finally:
@@ -61,7 +73,7 @@ class TestFullRun(PipelineTestCase):
         try:
             p.run_enrich()
             p.run_match()
-            ws = openpyxl.load_workbook(p.outputs()[0])["Top Matches"]
+            ws = top_sheet(p.outputs()[0])
             ranked = [ws.cell(r, 2).value for r in range(2, ws.max_row + 1)]
             self.assertIn("Catalyst Works LLC", ranked)
             pos = {name: i for i, name in enumerate(ranked)}
@@ -82,7 +94,8 @@ class TestFullRun(PipelineTestCase):
             self.assertEqual(ws.max_row - 1, 8)          # all 8 fixtures present
             stages = {ws.cell(r, 1).value for r in range(2, ws.max_row + 1)}
             self.assertTrue(stages <= {"Top 20", "Secondary scored (top 40)",
-                                       "Alignment scored", "Filtered out (pre-filter)"})
+                                       "Alignment scored", "Filtered out (pre-filter)",
+                                       "Not scored (no description)"})
         finally:
             p.__exit__()
 
@@ -168,8 +181,9 @@ class TestCaching(PipelineTestCase):
             FakeOpenAI.reset()
             p.run_match()
             counts = FakeOpenAI.counts()
-            # 8 companies x 2 faculty = 16 alignment calls (no caching there)
-            self.assertEqual(counts.get("alignment", 0), 16)
+            # 7 companies with a description x 2 faculty = 14 alignment calls
+            # (Unknown Holdings has none and is not sent to the AI)
+            self.assertEqual(counts.get("alignment", 0), 14)
             # secondary scored once per company only, not once per faculty
             self.assertEqual(counts.get("partnership", 0), 8)
             # Funding is arithmetic now, not a second LLM call. Zero here is
@@ -255,7 +269,8 @@ class TestPrefilterActivation(PipelineTestCase):
             FakeOpenAI.reset()
             p.run_match()
             counts = FakeOpenAI.counts()
-            self.assertEqual(counts.get("alignment", 0), 8, "all companies scored")
+            self.assertEqual(counts.get("alignment", 0), 7,
+                             "every company with a description scored")
             self.assertEqual(counts.get("embedding", 0), 0,
                              "faculty profile should not be embedded when filter is off")
         finally:
@@ -268,12 +283,30 @@ class TestPrefilterActivation(PipelineTestCase):
             FakeOpenAI.reset()
             p.run_match()
             counts = FakeOpenAI.counts()
-            self.assertEqual(counts.get("alignment", 0), 3, "only candidates scored")
+            # pass 1 scores the 3 candidates; pass 2 the other 4 with a
+            # description - the 3 come from the cache, not a second call
+            self.assertEqual(counts.get("alignment", 0), 7)
             self.assertEqual(counts.get("embedding", 0), 1, "faculty profile embedded once")
+            wb = openpyxl.load_workbook(p.outputs()[0])
+            self.assertIn("Top Matches - 3 pre-filter", wb.sheetnames)
+            self.assertIn("Top Matches - all companies", wb.sheetnames)
+            ws = wb["All Companies"]
+            inpf = column(ws, "In 300 Pre-filter")
+            self.assertEqual([ws.cell(r, inpf).value for r in range(2, ws.max_row + 1)].count("Yes"), 3)
+        finally:
+            p.__exit__()
 
+    def test_no_full_pass_only_scores_candidates(self):
+        p = self._prepared(config_overrides={"prefilter": {"top_n_candidates": 3}})
+        try:
+            p.run_enrich()
+            FakeOpenAI.reset()
+            p.run_match(["--no-full"])
+            self.assertEqual(FakeOpenAI.counts().get("alignment", 0), 3, "only candidates scored")
             ws = openpyxl.load_workbook(p.outputs()[0])["All Companies"]
             stages = [ws.cell(r, 1).value for r in range(2, ws.max_row + 1)]
-            self.assertEqual(stages.count("Filtered out (pre-filter)"), 5)
+            self.assertEqual(stages.count("Filtered out (pre-filter)")
+                             + stages.count("Not scored (no description)"), 5)
         finally:
             p.__exit__()
 
@@ -283,10 +316,11 @@ class TestPrefilterActivation(PipelineTestCase):
             p.run_enrich()
             p.run_match()
             ws = openpyxl.load_workbook(p.outputs()[0])["All Companies"]
-            scored = {ws.cell(r, 3).value for r in range(2, ws.max_row + 1)
-                      if ws.cell(r, 1).value != "Filtered out (pre-filter)"}
-            self.assertIn("Catalyst Works LLC", scored)
-            self.assertNotIn("Dental Supplies Co.", scored)
+            inpf = column(ws, "In 300 Pre-filter")
+            kept = {ws.cell(r, 3).value for r in range(2, ws.max_row + 1)
+                    if ws.cell(r, inpf).value == "Yes"}
+            self.assertIn("Catalyst Works LLC", kept)
+            self.assertNotIn("Dental Supplies Co.", kept)
         finally:
             p.__exit__()
 
@@ -300,7 +334,8 @@ class TestRobustness(PipelineTestCase):
             p.run_enrich()
             self.assertEqual(p.run_match(), 0)
             ws = openpyxl.load_workbook(p.outputs()[0])["All Companies"]
-            rows = {ws.cell(r, 3).value: ws.cell(r, 11).value
+            col = column(ws, "Alignment Score (1-9)")
+            rows = {ws.cell(r, 3).value: ws.cell(r, col).value
                     for r in range(2, ws.max_row + 1)}
             self.assertEqual(rows["Unknown Holdings Inc."], "NA")
             self.assertEqual(rows["Broken Data Corp."], "NA")
@@ -326,10 +361,10 @@ class TestRobustness(PipelineTestCase):
         try:
             p.run_enrich(["--skip-geocode"])
             p.run_match()
-            ws = openpyxl.load_workbook(p.outputs()[0])["Top Matches"]
+            ws = top_sheet(p.outputs()[0])
             self.assertEqual(ws.cell(2, 2).value, "No Address Co.")
-            self.assertIsNone(ws.cell(2, 4).value)      # distance blank
-            self.assertEqual(ws.cell(2, 7).value, 0)    # distance score 0
+            self.assertIsNone(ws.cell(2, column(ws, "Distance (mi)")).value)
+            self.assertEqual(ws.cell(2, column(ws, "Distance Score")).value, 0)
         finally:
             p.__exit__()
 

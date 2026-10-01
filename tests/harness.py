@@ -94,6 +94,14 @@ class FakeOpenAI:
                 if line.startswith("Company:"):
                     company = line.split(":", 1)[1].strip()
 
+            if "company profile writer" in system:
+                FakeOpenAI.call_log.append("profile")
+                # echo the source text so relevant words survive into the profile
+                body = user.split("Capital IQ description:", 1)[-1]
+                return _ChatResp("Mock profile. " + " ".join(body.split())[:600])
+            if "justification" in system:
+                FakeOpenAI.call_log.append("justification")
+                return _ChatResp(json.dumps({"justification": f"Mock justification for {company}."}))
             if "partner" in system:
                 kind = "partnership"
             elif "budget" in system:
@@ -202,6 +210,7 @@ class TempProject:
         cfg["paths"] = {
             "companies_raw": str(self.dir / "data" / "input" / "companies_raw.xlsx"),
             "faculty_database": str(self.dir / "data" / "input" / "Faculty Database.xlsx"),
+            "faculty_registration": str(self.dir / "data" / "input" / "registration.csv"),
             "companies_enriched": str(self.dir / "data" / "companies_enriched.xlsx"),
             "companies_combined": str(self.dir / "data" / "companies_combined.xlsx"),
             "sources_dir": str(self.dir / "data" / "sources"),
@@ -254,6 +263,25 @@ class TempProject:
         for row in self.faculty:
             ws.append(list(row))
         wb.save(self.dir / "data" / "input" / "Faculty Database.xlsx")
+
+    def write_registration(self, rows):
+        """rows: dicts of form answers -> the registration CSV, with the
+        real export's long question headers (and an Email column, which
+        must never reach an output)."""
+        import pandas as pd
+        q = {
+            "name": "Name", "email": "Email", "school": "School/ College",
+            "department": "Department",
+            "nature": "Which of the following best describes the nature of your research? (Select all that apply.)",
+            "keywords": "Please provide 3–5 keywords that best describe your research.",
+            "research": "Please briefly describe your research and the problems, questions, or challenges your work seeks to address. (Approximately 150 words)",
+            "sector1": "Which industry sector is most relevant to your research or potential industry interests? ",
+            "sector2": "Which secondary industry sector is relevant to your research or potential industry interests? ",
+            "notes": "Is there anything else about your research, industry interests, existing relationships, or goals that would be helpful for us to know?",
+        }
+        pd.DataFrame([{q[k]: v for k, v in r.items()} for r in rows],
+                     columns=list(q.values())).to_csv(
+            self.dir / "data" / "input" / "registration.csv", index=False)
 
     # ---------- accessors ----------
     def settings(self):

@@ -217,7 +217,20 @@ class TestOutputWorkbook(unittest.TestCase):
             self.assertEqual(ws.cell(1, 1).value, "Rank")
             self.assertEqual(ws.cell(2, 1).value, 1)
             self.assertEqual(ws.cell(2, 2).value, "Catalyst Works LLC")
-            self.assertEqual(ws.cell(2, 16).value, 0.7123)
+            hdr = [c.value for c in ws[1]]
+            self.assertEqual(ws.cell(2, hdr.index("Overall Score") + 1).value, 0.7123)
+            self.assertEqual(hdr[2], "Justification")
+
+    def test_one_tab_per_pass(self):
+        faculty, results, all_rows, run_info = self._sample()
+        with TempProject() as p:
+            out = p.dir / "out.xlsx"
+            write_faculty_output(out, faculty, {"Top Matches - 300 pre-filter": results,
+                                                "Top Matches - all companies": results},
+                                 run_info, all_rows=all_rows)
+            self.assertEqual(openpyxl.load_workbook(out).sheetnames,
+                             ["Top Matches - 300 pre-filter", "Top Matches - all companies",
+                              "All Companies", "Run Info"])
 
     def test_run_info_records_profile_and_weights(self):
         faculty, results, all_rows, run_info = self._sample()

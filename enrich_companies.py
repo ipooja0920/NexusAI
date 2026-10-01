@@ -14,8 +14,11 @@ every company:
            -> academic_adjustment (track record with universities: added
                                to the AI partnership score at match time)
   text     -> research_focus (trial conditions, OpenAlex topics, SBIR
-              project titles) and an embedding of name + description +
-              research focus (cached)
+              project titles) and company_profile: for companies with
+              SBIR / trial / OpenAlex text, an AI-written ~150-word profile
+              from the Capital IQ description plus that text (cached);
+              otherwise the Capital IQ description. The profile is embedded
+              (cached) and is what the faculty matching reads.
 
 Every source column of the combined file is carried across, so the
 enriched sheet shows the evidence behind each score.
@@ -28,6 +31,7 @@ Usage:
     python enrich_companies.py
     python enrich_companies.py --skip-geocode    # testing without network
     python enrich_companies.py --skip-embeddings # testing without API key
+    python enrich_companies.py --skip-profiles   # keep plain descriptions
 """
 from __future__ import annotations
 
@@ -39,10 +43,11 @@ import pandas as pd
 from openpyxl.utils import column_index_from_string
 
 from nexus.cache import Caches, _text_key
+from nexus.company_profile import build_profiles, cache_key, has_sources, source_text
 from nexus.excel_io import write_enriched
 from nexus.funding import company_academic_adjustment, company_funding_score
 from nexus.geo import Geocoder, clean_address_block, distance_miles, select_address_block
-from nexus.prefilter import company_embedding_text, embed_text
+from nexus.prefilter import company_embedding_text, company_profile_text, embed_text
 from nexus.scoring import (distance_score, employee_score, parse_employees,
                            parse_revenue, revenue_score)
 from nexus.settings import Settings
@@ -75,7 +80,7 @@ BASE_COLUMNS = [
     "employees", "revenue_usdmm",
     "distance_score", "employee_score", "revenue_score",
     "funding_score", "funding_reason", "academic_adjustment", "academic_reason",
-    "research_focus",
+    "research_focus", "company_profile", "profile_from",
 ]
 
 FOCUS_TITLES = 3          # newest SBIR project titles in research_focus
@@ -120,6 +125,8 @@ def main() -> int:
                     help="Skip geocoding (distances blank). Testing only.")
     ap.add_argument("--skip-embeddings", action="store_true",
                     help="Skip embeddings (pre-filter won't work). Testing only.")
+    ap.add_argument("--skip-profiles", action="store_true",
+                    help="Do not write AI company profiles (plain descriptions are used).")
     args = ap.parse_args()
 
     cfg = Settings()
@@ -162,13 +169,44 @@ def main() -> int:
             caches=caches,
         )
 
+    # ---- AI company profiles: Capital IQ description + source text ----
+    rows = df.to_dict("records")
+    profiles = {}
+    if client is not None and not args.skip_profiles:
+        model = cfg.openai.get("profile_model") or cfg.openai["scoring_model"]
+        desc_col = names.get("description")
+        jobs = {i: source_text(str(r.get(names["company"])).strip(),
+                               r.get(desc_col) if desc_col else None, r)
+                for i, r in enumerate(rows) if has_sources(r)}
+        cached = sum(1 for t in jobs.values()
+                     if caches.get_profile(cache_key(model, t)))
+        print(f"Company profiles: {len(jobs):,} companies have SBIR / trial / "
+              f"OpenAlex text ({cached:,} cached, {len(jobs) - cached:,} to write)")
+        tp = time.time()
+
+        def progress(done, total):
+            if done % 100 == 0 or done == total:
+                print(f"  [profiles] {done}/{total} written ({time.time()-tp:.0f}s)")
+                if done % 500 == 0:
+                    caches.profiles.save()
+        profiles = build_profiles(client, model, jobs, caches,
+                                  workers=int(cfg.openai.get("concurrency", 16)),
+                                  max_retries=cfg.openai["max_retries"],
+                                  progress=progress)
+        caches.profiles.save()
+        failed = sum(1 for i in jobs if not profiles.get(i))
+        if failed:
+            print(f"  [profiles] {failed} could not be written - those keep the "
+                  "Capital IQ description + research focus")
+        print()
+
     reference = cfg.geocoding["reference_point"]
     comp_cfg = cfg.components
     records = []
     stats = {"geocoded": 0, "cached": 0, "failed": 0, "embedded": 0, "emb_cached": 0}
     t0 = time.time()
 
-    for i, row in enumerate(df.to_dict("records")):
+    for i, row in enumerate(rows):
         g = lambda f: row.get(names[f]) if f in names else None   # noqa: E731
         company = str(g("company")).strip()
 
@@ -209,6 +247,13 @@ def main() -> int:
             "revenue_score": round(revenue_score(rev, comp_cfg["revenue"]), 6),
             "research_focus": focus,
         }
+        if profiles.get(i):
+            record["company_profile"] = profiles[i]
+            record["profile_from"] = "AI: Capital IQ description + sources"
+        else:
+            record["company_profile"] = company_profile_text(g("description"), focus) or None
+            record["profile_from"] = ("Capital IQ description + research focus" if focus
+                                      else "Capital IQ description")
         record.update({c: row.get(c) for c in source_cols})
 
         # Scores that need no API call live in the enriched sheet, beside
@@ -221,7 +266,7 @@ def main() -> int:
         # ---- embedding ----
         record["embedding_key"] = ""
         if client is not None:
-            text = company_embedding_text(company, record["description"], focus)
+            text = company_embedding_text(company, record["company_profile"])
             was_cached = caches.get_embedding(text) is not None
             vec = embed_text(client, cfg.openai["embedding_model"], text, caches)
             if vec is not None:
@@ -232,7 +277,10 @@ def main() -> int:
         done = i + 1
         if done % 250 == 0 or done == n:
             print(f"  [{done}/{n}] processed ({time.time()-t0:.0f}s elapsed)")
-            caches.save_all()   # periodic save so interrupts lose nothing
+        if done % 2500 == 0:
+            # periodic save so an interrupt loses little. Not every 250 rows:
+            # embeddings.json is several hundred MB and each save rewrites it
+            caches.save_all()
 
     inputs = SCORE_INPUTS + ([CT_ACTIVE] if cfg.academic.get("ct_active_penalty") else [])
     columns = BASE_COLUMNS + [c for c in inputs if c in df.columns] + ["embedding_key"]

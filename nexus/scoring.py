@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 import time
 from typing import List, Optional, Tuple
 
@@ -24,10 +25,15 @@ ALIGNMENT_SYSTEM_PROMPT = (
     "7-8: Strong relevance; clear overlap in focus or technology\n"
     "9: Exceptional match; the company's work directly overlaps with the research focus\n\n"
     "Consider:\n"
+    "- The researcher's keywords and the problems their research addresses\n"
     "- Scientific mechanisms\n"
     "- Technologies or platforms\n"
-    "- Disease or application areas\n"
-    "- Research methods or capabilities\n\n"
+    "- Disease, condition or application areas\n"
+    "- Research methods or capabilities, including testing or validating the "
+    "company's products in the researcher's lab\n"
+    "- The nature of the research (applied / translational / clinical work fits "
+    "companies with products in that area) and the industry sectors and "
+    "interests the researcher names\n\n"
     "Focus on specific alignment with the research described. A company "
     "description is provided when available; ground your judgment in it.\n\n"
     "Return ONLY valid JSON with fields: "
@@ -105,6 +111,17 @@ def _parse_score_reason(raw: str) -> Tuple[str, str]:
         return "NA", STD_NA_REASON
 
 
+# API calls and tokens used, so a sample run can say what a full run costs
+USAGE = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
+_USAGE_LOCK = threading.Lock()
+
+
+def reset_usage() -> None:
+    with _USAGE_LOCK:
+        for k in USAGE:
+            USAGE[k] = 0
+
+
 def _chat(client, model: str, system_prompt: str, user_prompt: str) -> str:
     resp = client.chat.completions.create(
         model=model,
@@ -113,29 +130,48 @@ def _chat(client, model: str, system_prompt: str, user_prompt: str) -> str:
             {"role": "user", "content": user_prompt},
         ],
     )
+    usage = getattr(resp, "usage", None)
+    with _USAGE_LOCK:
+        USAGE["calls"] += 1
+        if usage is not None:
+            USAGE["prompt_tokens"] += getattr(usage, "prompt_tokens", 0) or 0
+            USAGE["completion_tokens"] += getattr(usage, "completion_tokens", 0) or 0
     return (resp.choices[0].message.content or "").strip()
 
 
+RATE_LIMIT_WAITS = 8      # extra tries when OpenAI says "slow down"
+
+
 def _with_retries(fn, max_retries: int, rate_limit: float) -> Tuple[str, str]:
-    for attempt in range(1, max_retries + 1):
+    attempt, waits = 1, 0
+    while attempt <= max_retries:
         try:
             score, reason = _parse_score_reason(fn())
             if rate_limit > 0:
                 time.sleep(rate_limit)
             return score, reason
-        except Exception:
+        except Exception as e:
+            # Many calls run in parallel: a rate-limit error means "wait",
+            # not "this company cannot be scored" - back off without using
+            # up a real attempt
+            if "ratelimit" in type(e).__name__.lower() and waits < RATE_LIMIT_WAITS:
+                waits += 1
+                time.sleep(min(60.0, 5.0 * waits))
+                continue
             if attempt < max_retries:
                 time.sleep(1.0 * attempt)
+            attempt += 1
     return "NA", STD_NA_REASON
 
 
 def score_alignment(client, model: str, company: str, description: Optional[str],
                     research_profile: str, max_retries: int = 3,
-                    rate_limit: float = 0.0) -> Tuple[str, str]:
+                    rate_limit: float = 0.0, industry: Optional[str] = None) -> Tuple[str, str]:
     desc_part = f"Company description: {description}\n" if description and description != "-" else ""
+    ind_part = f"Industry: {industry}\n" if industry else ""
     user_prompt = (
         f"Research program:\n{research_profile}\n\n"
-        f"Company: {company}\n{desc_part}"
+        f"Company: {company}\n{ind_part}{desc_part}"
         f"Respond with JSON only."
     )
     return _with_retries(
@@ -153,6 +189,39 @@ def score_secondary(client, model: str, company: str, system_prompt: str,
         lambda: _chat(client, model, system_prompt, user_prompt),
         max_retries, rate_limit,
     )
+
+
+JUSTIFICATION_SYSTEM_PROMPT = (
+    "You write the justification column of a faculty-to-company match list for a "
+    "university research office. Given a researcher's profile, a company's profile "
+    "and the scores already computed, explain in 2-3 sentences (at most 80 words) "
+    "why this company is a match for this researcher. Name the specific overlap: "
+    "which of the researcher's keywords, problems or methods the company's products, "
+    "technologies or conditions touch. Then mention the practical factors that "
+    "help or hurt (distance, company size, money available, track record with "
+    "universities) only as far as the figures given support them. Use only the "
+    "information given; do not invent facts and do not name any people. If the "
+    "overlap is weak, say so plainly.\n\n"
+    'Return ONLY valid JSON: {"justification": string}.'
+)
+
+
+def write_justification(client, model: str, research_profile: str, company: str,
+                        facts: str, max_retries: int = 3) -> Optional[str]:
+    """2-3 sentences on why this company matches this researcher."""
+    user_prompt = (f"Researcher:\n{research_profile}\n\nCompany: {company}\n"
+                   f"{facts}\n\nRespond with JSON only.")
+    for attempt in range(1, max_retries + 1):
+        try:
+            raw = _chat(client, model, JUSTIFICATION_SYSTEM_PROMPT, user_prompt)
+            text = str(json.loads(raw).get("justification", "")).strip()
+            if text:
+                return text
+        except Exception:
+            pass
+        if attempt < max_retries:
+            time.sleep(1.0 * attempt)
+    return None
 
 
 # ======================================================================

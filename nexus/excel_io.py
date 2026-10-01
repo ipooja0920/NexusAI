@@ -196,36 +196,57 @@ def set_faculty_flag(path: Path, cfg: dict, row: int, value: str = "Y") -> None:
 # Per-faculty output workbook
 # ======================================================================
 
-RESULT_HEADERS = [
-    "Rank", "Company", "Website", "Distance (mi)", "Employees", "Revenue ($USDmm)",
-    "Distance Score", "Employee Score", "Revenue Score",
-    "Alignment Score (1-9)", "Alignment Reason",
-    "Partnership Score (1-9)", "Partnership Reason",
-    "Funding Score (1-9)", "Funding Reason",
-    "Overall Score", "Company Description",
+# (header, record key, column width). Justification sits next to the
+# company name: it is the column people read first.
+RESULT_COLUMNS = [
+    ("Rank", "rank", 6),
+    ("Company", "company", 30),
+    ("Justification", "justification", 60),
+    ("Overall Score", "overall_score", 10),
+    ("Sector Match", "sector_match", 14),
+    ("Website", "website", 24),
+    ("Distance (mi)", "distance_miles", 10),
+    ("Employees", "employees", 10),
+    ("Revenue ($USDmm)", "revenue_usdmm", 12),
+    ("Distance Score", "distance_score", 10),
+    ("Employee Score", "employee_score", 10),
+    ("Revenue Score", "revenue_score", 10),
+    ("Alignment Score (1-9)", "alignment_score", 11),
+    ("Alignment Reason", "alignment_reason", 45),
+    ("Partnership Score (1-9)", "partnership_score", 11),
+    ("Partnership Reason", "partnership_reason", 45),
+    ("Funding Score (0-1)", "funding_score", 10),
+    ("Funding Reason", "funding_reason", 40),
+    ("Company Profile", "company_profile", 70),
 ]
 
-COL_WIDTHS = {
-    "A": 6, "B": 32, "C": 26, "D": 12, "E": 11, "F": 16,
-    "G": 13, "H": 13, "I": 13, "J": 12, "K": 45, "L": 12, "M": 45,
-    "N": 12, "O": 45, "P": 12, "Q": 60,
-}
-
-
-ALL_HEADERS = [
-    "Stage", "Rank", "Company", "Website", "Distance (mi)", "Employees",
-    "Revenue ($USDmm)", "Distance Score", "Employee Score", "Revenue Score",
-    "Alignment Score (1-9)", "Alignment Reason",
-    "Partnership Score (1-9)", "Partnership Reason",
-    "Funding Score (1-9)", "Funding Reason",
-    "Overall Score", "Company Description",
+ALL_COLUMNS = [
+    ("Stage", "stage", 24),
+    ("Rank", "rank", 6),
+    ("Company", "company", 30),
+    ("In 300 Pre-filter", "in_prefilter", 10),
+    ("Sector Match", "sector_match", 14),
+    ("Website", "website", 24),
+    ("Distance (mi)", "distance_miles", 10),
+    ("Employees", "employees", 10),
+    ("Revenue ($USDmm)", "revenue_usdmm", 12),
+    ("Distance Score", "distance_score", 10),
+    ("Employee Score", "employee_score", 10),
+    ("Revenue Score", "revenue_score", 10),
+    ("Alignment Score (1-9)", "alignment_score", 11),
+    ("Alignment Reason", "alignment_reason", 45),
+    ("Partnership Score (1-9)", "partnership_score", 11),
+    ("Partnership Reason", "partnership_reason", 45),
+    ("Funding Score (0-1)", "funding_score", 10),
+    ("Funding Reason", "funding_reason", 40),
+    ("Overall Score", "overall_score", 10),
+    ("Company Profile", "company_profile", 70),
 ]
 
-ALL_COL_WIDTHS = {
-    "A": 22, "B": 6, "C": 32, "D": 26, "E": 12, "F": 11, "G": 16,
-    "H": 13, "I": 13, "J": 13, "K": 12, "L": 45, "M": 12, "N": 45,
-    "O": 12, "P": 45, "Q": 12, "R": 60,
-}
+RESULT_HEADERS = [h for h, _, _ in RESULT_COLUMNS]
+ALL_HEADERS = [h for h, _, _ in ALL_COLUMNS]
+
+_ROUND4 = {"overall_score", "distance_score", "employee_score", "revenue_score"}
 
 
 def unique_path(path: Path) -> Path:
@@ -243,65 +264,43 @@ def unique_path(path: Path) -> Path:
         n += 1
 
 
-def write_faculty_output(path: Path, faculty: dict, results: List[dict],
-                         run_info: dict, all_rows: Optional[List[dict]] = None) -> None:
-    wb = openpyxl.Workbook()
-
-    # ---- Results sheet ----
-    ws = wb.active
-    ws.title = "Top Matches"
-    ws.append(RESULT_HEADERS)
+def _sheet(wb, title: str, columns, rows, freeze: str, first: bool = False):
+    ws = wb.active if first else wb.create_sheet(title)
+    ws.title = title
+    ws.append([h for h, _, _ in columns])
     for cell in ws[1]:
         cell.fill = HEADER_FILL
         cell.font = HEADER_FONT
         cell.alignment = Alignment(vertical="center", wrap_text=True)
-
-    for r in results:
-        ws.append([
-            r["rank"], r["company"], r.get("website"), r.get("distance_miles"),
-            r.get("employees"), r.get("revenue_usdmm"),
-            round(r["distance_score"], 4), round(r["employee_score"], 4),
-            round(r["revenue_score"], 4),
-            r.get("alignment_score"), r.get("alignment_reason"),
-            r.get("partnership_score"), r.get("partnership_reason"),
-            r.get("funding_score"), r.get("funding_reason"),
-            round(r["overall_score"], 4), r.get("description"),
-        ])
-
-    for letter, width in COL_WIDTHS.items():
-        ws.column_dimensions[letter].width = width
+    for r in rows:
+        vals = []
+        for _, key, _ in columns:
+            v = r.get(key)
+            if key in _ROUND4 and isinstance(v, (int, float)):
+                v = round(v, 4)
+            vals.append(v)
+        ws.append(vals)
+    for idx, (_, _, width) in enumerate(columns, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
     for row in ws.iter_rows(min_row=2):
         for cell in row:
             cell.alignment = Alignment(vertical="top", wrap_text=True)
-    ws.freeze_panes = "C2"
+    ws.freeze_panes = freeze
+    return ws
 
-    # ---- All Companies sheet (full funnel visibility, v1-style) ----
+
+def write_faculty_output(path: Path, faculty: dict, tabs, run_info: dict,
+                         all_rows: Optional[List[dict]] = None) -> None:
+    """tabs: {sheet title: ranked rows} - one tab per scoring pass (with the
+    300 pre-filter, and over all companies). A plain list is one tab named
+    "Top Matches"."""
+    if isinstance(tabs, list):
+        tabs = {"Top Matches": tabs}
+    wb = openpyxl.Workbook()
+    for k, (title, rows) in enumerate(tabs.items()):
+        _sheet(wb, title[:31], RESULT_COLUMNS, rows, "C2", first=(k == 0))
     if all_rows:
-        wa = wb.create_sheet("All Companies")
-        wa.append(ALL_HEADERS)
-        for cell in wa[1]:
-            cell.fill = HEADER_FILL
-            cell.font = HEADER_FONT
-            cell.alignment = Alignment(vertical="center", wrap_text=True)
-        for r in all_rows:
-            def _r4(v):
-                return round(v, 4) if isinstance(v, (int, float)) else v
-            wa.append([
-                r.get("stage"), r.get("rank"), r["company"], r.get("website"),
-                r.get("distance_miles"), r.get("employees"), r.get("revenue_usdmm"),
-                _r4(r.get("distance_score")), _r4(r.get("employee_score")),
-                _r4(r.get("revenue_score")),
-                r.get("alignment_score"), r.get("alignment_reason"),
-                r.get("partnership_score"), r.get("partnership_reason"),
-                r.get("funding_score"), r.get("funding_reason"),
-                _r4(r.get("overall_score")), r.get("description"),
-            ])
-        for letter, width in ALL_COL_WIDTHS.items():
-            wa.column_dimensions[letter].width = width
-        for row in wa.iter_rows(min_row=2):
-            for cell in row:
-                cell.alignment = Alignment(vertical="top", wrap_text=True)
-        wa.freeze_panes = "D2"
+        _sheet(wb, "All Companies", ALL_COLUMNS, all_rows, "D2")
 
     # ---- Run Info sheet (traceability) ----
     info = wb.create_sheet("Run Info")
@@ -317,6 +316,8 @@ def write_faculty_output(path: Path, faculty: dict, results: List[dict],
         ("Embedding model", run_info.get("embedding_model")),
         ("Companies in datasource", run_info.get("n_companies")),
         ("Candidates after pre-filter", run_info.get("n_candidates")),
+        ("Companies scored without the pre-filter", run_info.get("n_full")),
+        ("Faculty source", run_info.get("faculty_source")),
         ("Secondary scoring cutoff", run_info.get("secondary_cutoff")),
         ("Weights", run_info.get("weights")),
     ]

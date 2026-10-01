@@ -5,8 +5,11 @@ datasource refreshes and repeated faculty runs cheap:
   - geocode.json     keyed by cleaned address string
   - embeddings.json  keyed by sha256 of the embedded text (so a changed
                      description automatically re-embeds)
-  - company_scores.json  keyed by normalized company name; holds
-                     faculty-independent partnership/funding scores
+  - company_scores.json  keyed by company name + the text judged; holds
+                     faculty-independent partnership scores
+  - company_profiles.json  AI-written company profiles, keyed by source text
+  - alignment_scores.json  AI alignment scores, keyed by faculty profile +
+                     company text, so an interrupted run resumes for free
 """
 from __future__ import annotations
 
@@ -83,6 +86,8 @@ class Caches:
         self.geocode = JsonCache(cache_dir / "geocode.json")
         self.embeddings = JsonCache(cache_dir / "embeddings.json")
         self.company_scores = JsonCache(cache_dir / "company_scores.json")
+        self.profiles = JsonCache(cache_dir / "company_profiles.json")
+        self.alignment = JsonCache(cache_dir / "alignment_scores.json")
 
     # ---------- geocode ----------
     def get_geocode(self, cleaned_address: str):
@@ -99,16 +104,41 @@ class Caches:
         self.embeddings.set(_text_key(text), vector)
 
     # ---------- company secondary scores ----------
-    def get_company_scores(self, company: str):
-        return self.company_scores.get(_norm_company(company))
+    # Keyed by company AND the text the score was judged from, so a new or
+    # changed company profile gets a fresh partnership score instead of the
+    # one judged from the old description.
+    @staticmethod
+    def _score_key(company: str, text: str = None) -> str:
+        key = _norm_company(company)
+        return f"{key}|{_text_key(text)[:16]}" if text else key
 
-    def set_company_scores(self, company: str, partnership: dict, funding: dict) -> None:
+    def get_company_scores(self, company: str, text: str = None):
+        return self.company_scores.get(self._score_key(company, text))
+
+    def set_company_scores(self, company: str, partnership: dict, funding: dict,
+                           text: str = None) -> None:
         self.company_scores.set(
-            _norm_company(company),
+            self._score_key(company, text),
             {"company": company, "partnership": partnership, "funding": funding},
         )
+
+    # ---------- AI company profiles (keyed by their source text) ----------
+    def get_profile(self, key: str):
+        return self.profiles.get(_text_key(key))
+
+    def set_profile(self, key: str, profile: str) -> None:
+        self.profiles.set(_text_key(key), profile)
+
+    # ---------- alignment scores (faculty profile x company text) ----------
+    def get_alignment(self, key: str):
+        return self.alignment.get(_text_key(key))
+
+    def set_alignment(self, key: str, value: dict) -> None:
+        self.alignment.set(_text_key(key), value)
 
     def save_all(self) -> None:
         self.geocode.save()
         self.embeddings.save()
         self.company_scores.save()
+        self.profiles.save()
+        self.alignment.save()

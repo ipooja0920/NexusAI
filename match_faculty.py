@@ -1,35 +1,65 @@
 #!/usr/bin/env python3
 """Stage 1 - Match faculty against the enriched company datasource.
 
-Processes every faculty row with Flag = N (or a specific one via
---faculty). For each: embedding pre-filter -> LLM alignment scoring ->
-top-40 partnership/funding scoring (cached across faculty) -> final
-weighted score -> per-faculty output workbook -> Flag flipped to Y.
+Faculty come from the BD-IFR Faculty Registration export (CSV) - pick one
+with --row (its spreadsheet row; the header is row 1) or --faculty "Name" -
+or, with neither, from the old Faculty Database (every row with Flag = N).
+
+For each faculty, two passes over the companies:
+  1. WITH the pre-filter: embedding similarity -> the closest 300 companies
+     -> AI alignment score
+  2. WITHOUT it: AI alignment score for every company that has a
+     description (about 20,000), run `openai.concurrency` calls at a time
+In each pass: preliminary score -> top 40 get the AI partnership score
+(cached across faculty) -> final weighted score -> top 20. Every top-20
+company gets a written justification. One workbook per faculty: a tab per
+pass, All Companies, Run Info.
+
+Alignment scores are cached (faculty profile x company text), so an
+interrupted run picks up where it stopped and the second pass reuses the
+first pass's 300 scores.
 
 Usage:
-    python match_faculty.py
-    python match_faculty.py --dry-run
-    python match_faculty.py --faculty "Ioulia Valla"
+    python match_faculty.py --row 13
+    python match_faculty.py --faculty "Julie Burland"
+    python match_faculty.py --row 13 --sample 200   # cost/speed test first
+    python match_faculty.py --row 13 --no-full      # 300 pre-filter tab only
+    python match_faculty.py                         # Faculty Database, Flag = N
+    python match_faculty.py --row 13 --dry-run
 """
 from __future__ import annotations
 
 import argparse
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
+from nexus import scoring
 from nexus.cache import Caches
-from nexus.funding import company_academic_adjustment, company_funding_score
 from nexus.excel_io import (read_enriched, read_faculty, set_faculty_flag,
                             unique_path, write_faculty_output)
-from nexus.prefilter import (company_profile_text, embed_text, rank_by_similarity,
-                             select_candidates)
-from nexus.scoring import (FUNDING_SYSTEM_PROMPT, PARTNERSHIP_SYSTEM_PROMPT,
-                           normalize, score_alignment, score_secondary)
+from nexus.faculty_registration import (read_registration, research_profile,
+                                        sector_match)
+from nexus.funding import company_academic_adjustment, company_funding_score
+from nexus.prefilter import (company_embedding_text, company_profile_text,
+                             embed_text, rank_by_similarity, select_candidates)
+from nexus.scoring import (PARTNERSHIP_SYSTEM_PROMPT, normalize, score_alignment,
+                           score_secondary, write_justification)
 from nexus.settings import Settings
 
+ALIGN_VERSION = "v2"           # bump when the alignment prompt changes
+NO_TEXT_REASON = "No company description available - not scored"
+REGISTRATION_DEFAULT = "data/input/BDIFR Faculty Registration From-documents.csv"
+
+
+# ----------------------------------------------------------------------
+# Faculty
+# ----------------------------------------------------------------------
 
 def build_research_profile(fac: dict) -> str:
+    if fac.get("source") == "registration":
+        return research_profile(fac)
     parts = []
     if fac.get("research"):
         parts.append(fac["research"])
@@ -45,35 +75,14 @@ def safe_filename(name: str) -> str:
     return "".join(c for c in name if c.isalnum() or c in " ._-").strip()
 
 
-def get_secondary_scores(client, cfg, caches, company: str, description,
-                         row: dict):
-    """Partnership (LLM) + funding (arithmetic).
-
-    Funding used to be a second LLM call, asked to judge from a company
-    description whether it had "R&D expenditure", "grant history" and
-    "government funding relationships". All three are now measured and
-    sitting in the workbook, so the guess has been replaced by the figures -
-    which also halves the number of API calls this function makes.
-    """
-    f_score, f_reason = company_funding_score(row, cfg.funding)
-    funding = {"score": f_score, "reason": f_reason}
-
-    cached = caches.get_company_scores(company)
-    if cached is not None:
-        # Only the PARTNERSHIP half is worth caching - it costs an API call.
-        # Funding is recomputed every run on purpose: it is free, and a
-        # cached copy would silently outlive the config change or the fresh
-        # Form D quarter that should have moved it.
-        return cached["partnership"], funding, True
-
-    model = cfg.openai["scoring_model"]
-    p_score, p_reason = score_secondary(
-        client, model, company, PARTNERSHIP_SYSTEM_PROMPT, description,
-        max_retries=cfg.openai["max_retries"],
-        rate_limit=cfg.openai["rate_limit_seconds"])
-    partnership = {"score": p_score, "reason": p_reason}
-    caches.set_company_scores(company, partnership, funding)
-    return partnership, funding, False
+def company_text(c: dict) -> str:
+    """What the AI reads about a company: the enriched company profile
+    (Capital IQ description + SBIR / trials / OpenAlex), or for an older
+    enriched file the description + research focus."""
+    prof = c.get("company_profile")
+    if prof and str(prof).strip() not in ("", "-", "nan", "None"):
+        return str(prof).strip()
+    return company_profile_text(c.get("description"), c.get("research_focus"))
 
 
 def to_num(score_str):
@@ -84,113 +93,131 @@ def to_num(score_str):
         return None
 
 
-def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches,
-                      client) -> str:
-    """Run the full funnel for one faculty. Returns output file path."""
-    n_companies = len(companies)
-    profile = build_research_profile(fac)
-    print(f"\n{'='*60}\nFaculty: {fac['name']}  ({fac['department']})")
-    print(f"Profile: {profile[:100]}{'...' if len(profile) > 100 else ''}")
+# ----------------------------------------------------------------------
+# AI calls, parallel and cached
+# ----------------------------------------------------------------------
 
-    # ---------- Pre-filter ----------
-    top_n = cfg.prefilter["top_n_candidates"] if cfg.prefilter["enabled"] else 0
-    if top_n and top_n > 0 and n_companies > top_n:
-        profile_vec = embed_text(client, cfg.openai["embedding_model"], profile, caches)
-        company_vecs = []
-        for c in companies:
-            from nexus.prefilter import company_embedding_text
-            text = company_embedding_text(c["company"], c.get("description"),
-                                          c.get("research_focus"))
-            company_vecs.append(caches.get_embedding(text))
-        n_missing = sum(1 for v in company_vecs if v is None)
-        if n_missing:
-            print(f"  [prefilter] WARNING: {n_missing} companies have no embedding "
-                  "(re-run enrich_companies.py) - they rank last in pre-filter")
-        sims = rank_by_similarity(profile_vec, company_vecs)
-        candidate_idx = select_candidates(sims, top_n)
-        print(f"  [prefilter] {n_companies} companies -> {len(candidate_idx)} candidates")
-    else:
-        candidate_idx = list(range(n_companies))
-        print(f"  [prefilter] disabled - scoring all {n_companies} companies")
-
-    # ---------- Alignment scoring ----------
+def score_alignments(indices, companies, texts, profile, cfg, caches, client, align):
+    """Fill `align` {company index: {"score", "reason"}} for `indices`."""
     model = cfg.openai["scoring_model"]
-    retries = cfg.openai["max_retries"]
-    rate = cfg.openai["rate_limit_seconds"]
-
-    align = {}   # global company index -> {"score": str, "reason": str}
-    for k, gi in enumerate(candidate_idx):
+    todo = []
+    for gi in indices:
+        if gi in align:
+            continue
+        if not texts[gi]:
+            align[gi] = {"score": "NA", "reason": NO_TEXT_REASON}
+            continue
         c = companies[gi]
-        score, reason = score_alignment(
-            client, model, c["company"],
-            company_profile_text(c.get("description"), c.get("research_focus")), profile,
-            max_retries=retries, rate_limit=rate)
-        align[gi] = {"score": score, "reason": reason}
-        if (k + 1) % 20 == 0 or (k + 1) == len(candidate_idx):
-            print(f"  [alignment] {k+1}/{len(candidate_idx)} scored")
+        key = f"{ALIGN_VERSION}|{model}|{profile}|||{c['company']}|{c.get('industry')}|{texts[gi]}"
+        hit = caches.get_alignment(key)
+        if hit:
+            align[gi] = hit
+        else:
+            todo.append((gi, key))
+    if not todo:
+        return 0
+    n, t0 = len(todo), time.time()
+    step = 20 if n <= 400 else 500
 
-    # ---------- Preliminary score -> top 40 ----------
+    def one(gi):
+        c = companies[gi]
+        return score_alignment(client, model, c["company"], texts[gi], profile,
+                               max_retries=cfg.openai["max_retries"],
+                               rate_limit=cfg.openai["rate_limit_seconds"],
+                               industry=c.get("industry"))
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=int(cfg.openai.get("concurrency", 16))) as pool:
+        futures = {pool.submit(one, gi): (gi, key) for gi, key in todo}
+        for fut in as_completed(futures):
+            gi, key = futures[fut]
+            score, reason = fut.result()
+            align[gi] = {"score": score, "reason": reason}
+            if score != "NA" or reason != scoring.STD_NA_REASON:
+                caches.set_alignment(key, align[gi])
+            done += 1
+            if done % step == 0 or done == n:
+                print(f"  [alignment] {done}/{n} scored ({time.time()-t0:.0f}s)")
+            if done % 2000 == 0:
+                caches.alignment.save()
+    caches.alignment.save()
+    failed = sum(1 for gi, _ in todo if align[gi]["reason"] == scoring.STD_NA_REASON)
+    if failed:
+        print(f"  [alignment] {failed} got no usable answer (shown as NA) - they are "
+              "not cached, so a re-run retries just those")
+    return n
+
+
+def partnership_scores(indices, companies, texts, cfg, caches, client, memo):
+    """Fill `memo` {company index: partnership dict} - AI, cached by
+    company + profile text, so it is shared across faculty."""
+    model = cfg.openai["scoring_model"]
+    todo = []
+    for gi in indices:
+        if gi in memo:
+            continue
+        hit = caches.get_company_scores(companies[gi]["company"], texts[gi])
+        if hit is not None:
+            memo[gi] = hit["partnership"]
+        else:
+            todo.append(gi)
+
+    def one(gi):
+        return score_secondary(client, model, companies[gi]["company"],
+                               PARTNERSHIP_SYSTEM_PROMPT, texts[gi],
+                               max_retries=cfg.openai["max_retries"],
+                               rate_limit=cfg.openai["rate_limit_seconds"])
+
+    with ThreadPoolExecutor(max_workers=int(cfg.openai.get("concurrency", 16))) as pool:
+        futures = {pool.submit(one, gi): gi for gi in todo}
+        for fut in as_completed(futures):
+            gi = futures[fut]
+            score, reason = fut.result()
+            memo[gi] = {"score": score, "reason": reason}
+            caches.set_company_scores(companies[gi]["company"], memo[gi],
+                                      {"score": None, "reason": "computed at match time"},
+                                      texts[gi])
+    caches.company_scores.save()
+    return len(indices) - len(todo), len(todo)
+
+
+# ----------------------------------------------------------------------
+# One pass: preliminary score -> top 40 partnership -> final top 20
+# ----------------------------------------------------------------------
+
+def run_pass(candidate_idx, companies, texts, align, partner, cfg, caches, client):
     w = cfg.weights
-    align_nums = [to_num(align[gi]["score"]) if gi in align else None
-                  for gi in range(n_companies)]
+    n = len(companies)
+    cand = set(candidate_idx)
+    align_nums = [to_num(align[gi]["score"]) if gi in cand and gi in align else None
+                  for gi in range(n)]
     align_norm = normalize(align_nums)
 
     prelim_weight = w["distance"] + w["employees"] + w["revenue"] + w["alignment"]
-    prelim = []
-    for gi in range(n_companies):
-        if gi not in align:
-            prelim.append(-1.0)  # not a candidate
-            continue
+    prelim = {}
+    for gi in candidate_idx:
         c = companies[gi]
-        val = (w["distance"] * c["distance_score"] +
-               w["employees"] * c["employee_score"] +
-               w["revenue"] * c["revenue_score"] +
-               w["alignment"] * align_norm[gi]) / prelim_weight
-        prelim.append(val)
+        prelim[gi] = (w["distance"] * c["distance_score"] +
+                      w["employees"] * c["employee_score"] +
+                      w["revenue"] * c["revenue_score"] +
+                      w["alignment"] * align_norm[gi]) / prelim_weight
 
     cutoff = cfg.funnel["secondary_cutoff"]
-    ranked = sorted((gi for gi in candidate_idx), key=lambda i: prelim[i], reverse=True)
+    ranked = sorted(candidate_idx, key=lambda i: prelim[i], reverse=True)
     top_secondary = ranked[:cutoff]
-    print(f"  [funnel] top {len(top_secondary)} selected for partnership/funding scoring")
+    cached, new = partnership_scores(top_secondary, companies, texts, cfg, caches,
+                                     client, partner)
+    print(f"  [partnership] top {len(top_secondary)}: {cached} from cache, {new} new")
 
-    # ---------- Secondary scoring (cached across faculty) ----------
-    secondary = {}
-    n_cache_hits = 0
-    for k, gi in enumerate(top_secondary):
-        c = companies[gi]
-        partnership, funding, was_cached = get_secondary_scores(
-            client, cfg, caches, c["company"],
-            company_profile_text(c.get("description"), c.get("research_focus")), c)
-        secondary[gi] = {"partnership": partnership, "funding": funding}
-        n_cache_hits += was_cached
-        if (k + 1) % 10 == 0 or (k + 1) == len(top_secondary):
-            print(f"  [secondary] {k+1}/{len(top_secondary)} done "
-                  f"({n_cache_hits} from cache)")
-    caches.save_all()
-
-    # ---------- Final weighted score ----------
-    p_nums = [to_num(secondary[gi]["partnership"]["score"]) if gi in secondary else None
-              for gi in range(n_companies)]
+    p_nums = [to_num(partner[gi]["score"]) if gi in top_secondary else None
+              for gi in range(n)]
     p_norm = normalize(p_nums)
-
-    # Funding is deliberately NOT normalised, unlike the LLM scores.
-    #
-    # normalize() is min-max across the candidate pool, which is the right
-    # move for a 1-9 rubric whose absolute level means little. The funding
-    # score already means something absolute: 0.5 is "we have no evidence",
-    # and above it is "we do". Min-maxing a pool where most companies sit at
-    # exactly 0.5 would stretch that flat line to fill 0..1 and manufacture
-    # a ranking out of nothing.
-    f_norm = {gi: secondary[gi]["funding"]["score"] for gi in secondary}
-
-    # The AI partnership judgement, nudged by the measured academic track
-    # record (past university ties up, a current partner down - capped, see
-    # config `academic`). Added AFTER normalising, so the nudge keeps its
-    # absolute size instead of being stretched by the pool.
+    funding = {gi: company_funding_score(companies[gi], cfg.funding) for gi in top_secondary}
     academic = {gi: company_academic_adjustment(companies[gi], cfg.academic)
-                for gi in secondary}
-    p_adj = {gi: min(1.0, max(0.0, p_norm[gi] + academic[gi][0])) for gi in secondary}
-
+                for gi in top_secondary}
+    # Funding is NOT normalised (0.5 already means "no evidence"); the
+    # academic nudge is added after normalising so it keeps its size.
+    p_adj = {gi: min(1.0, max(0.0, p_norm[gi] + academic[gi][0])) for gi in top_secondary}
     overall = {}
     for gi in top_secondary:
         c = companies[gi]
@@ -199,140 +226,304 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches,
                        w["revenue"] * c["revenue_score"] +
                        w["alignment"] * align_norm[gi] +
                        w["partnership"] * p_adj[gi] +
-                       w["funding"] * f_norm.get(gi, cfg.funding["missing_score"]))
+                       w["funding"] * funding[gi][0])
+    final = sorted(overall, key=overall.get, reverse=True)[:cfg.funnel["final_top_n"]]
+    return {"candidates": list(candidate_idx), "prelim": prelim, "secondary": top_secondary,
+            "funding": funding, "academic": academic, "overall": overall, "final": final}
 
-    final_n = cfg.funnel["final_top_n"]
-    final_ranked = sorted(overall, key=overall.get, reverse=True)[:final_n]
+
+# ----------------------------------------------------------------------
+# Justification
+# ----------------------------------------------------------------------
+
+def _fmt(v, unit=""):
+    if v is None or (isinstance(v, float) and v != v):
+        return "unknown"
+    return f"{v:,.0f}{unit}" if isinstance(v, (int, float)) else f"{v}{unit}"
+
+
+def facts_for(gi, c, text, sector, align, partner, funding, academic) -> str:
+    return "\n".join([
+        f"Industry: {c.get('industry') or 'unknown'}"
+        + (f" ({sector} named by the researcher)" if sector else ""),
+        f"Company profile: {text or '(no description)'}",
+        f"Alignment score {align['score']}/9: {align['reason']}",
+        f"Partnership score {partner['score']}/9: {partner['reason']}",
+        f"University track record: {academic[1]}",
+        f"Money available: {funding[1]}",
+        f"Distance from UConn Storrs: {_fmt(c.get('distance_miles'), ' miles')}",
+        f"Revenue: {_fmt(c.get('revenue_usdmm'))} $USDmm; employees: {_fmt(c.get('employees'))}",
+    ])
+
+
+def justifications(indices, companies, texts, sectors, profile, align, partner,
+                   funding, academic, cfg, client) -> dict:
+    model = cfg.openai["scoring_model"]
+
+    def one(gi):
+        facts = facts_for(gi, companies[gi], texts[gi], sectors[gi], align[gi],
+                          partner[gi], funding[gi], academic[gi])
+        text = write_justification(client, model, profile, companies[gi]["company"],
+                                   facts, max_retries=cfg.openai["max_retries"])
+        # if the AI fails, the scores' own reasons still say why
+        return text or f"Alignment {align[gi]['score']}/9: {align[gi]['reason']}"
+
+    out = {}
+    with ThreadPoolExecutor(max_workers=int(cfg.openai.get("concurrency", 16))) as pool:
+        futures = {pool.submit(one, gi): gi for gi in indices}
+        for fut in as_completed(futures):
+            out[futures[fut]] = fut.result()
+    return out
+
+
+# ----------------------------------------------------------------------
+# One faculty
+# ----------------------------------------------------------------------
+
+def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, client,
+                      full: bool = True, sample: int = 0) -> str:
+    n = len(companies)
+    profile = build_research_profile(fac)
+    print(f"\n{'='*60}\nFaculty: {fac['name']}  ({fac.get('department')})")
+    print(f"Profile: {profile[:160]}{'...' if len(profile) > 160 else ''}")
+    texts = [company_text(c) for c in companies]
+    sectors = [sector_match(c.get("industry"), fac) for c in companies]
+    scoring.reset_usage()
+    t_start = time.time()
+
+    # ---------- Pass 1: with the pre-filter ----------
+    top_n = cfg.prefilter["top_n_candidates"] if cfg.prefilter["enabled"] else 0
+    sims = None
+    if top_n and top_n > 0 and n > top_n:
+        profile_vec = embed_text(client, cfg.openai["embedding_model"], profile, caches)
+        company_vecs = [caches.get_embedding(company_embedding_text(c["company"], texts[i]))
+                        for i, c in enumerate(companies)]
+        n_missing = sum(1 for v in company_vecs if v is None)
+        if n_missing:
+            print(f"  [prefilter] WARNING: {n_missing} companies have no embedding "
+                  "(re-run enrich_companies.py) - they rank last in pre-filter")
+        sims = rank_by_similarity(profile_vec, company_vecs)
+        cand_a = select_candidates(sims, top_n)
+        print(f"  [prefilter] {n} companies -> {len(cand_a)} candidates")
+    else:
+        cand_a = list(range(n))
+        print(f"  [prefilter] not needed - scoring all {n} companies")
+
+    align, partner = {}, {}
+    print("\n  Pass 1: pre-filter")
+    score_alignments(cand_a, companies, texts, profile, cfg, caches, client, align)
+    pass_a = run_pass(cand_a, companies, texts, align, partner, cfg, caches, client)
+    passes = {f"Top Matches - {len(cand_a)} pre-filter"
+              if len(cand_a) < n else "Top Matches - pre-filter": pass_a}
+
+    # ---------- Pass 2: without the pre-filter ----------
+    pass_b = None
+    if full and len(cand_a) < n:
+        with_text = [gi for gi in range(n) if texts[gi]]
+        if sample and sims is not None:
+            in_a = set(cand_a)
+            rest = [gi for gi in select_candidates(sims, 0) if gi not in in_a and texts[gi]]
+            cand_b = cand_a + rest[:sample]
+            title = f"Top Matches - sample {len(cand_b)}"
+        else:
+            cand_b = with_text
+            title = "Top Matches - all companies"
+        print(f"\n  Pass 2: no pre-filter - {len(cand_b):,} companies "
+              f"({n - len(with_text):,} have no description and are not scored)")
+        t_b = time.time()
+        calls_before = scoring.USAGE["calls"]
+        made = score_alignments(cand_b, companies, texts, profile, cfg, caches, client, align)
+        secs = time.time() - t_b
+        if sample and made:
+            remaining = len(with_text) - len(cand_b)
+            per = secs / made
+            print(f"\n  [sample] {made} new alignment calls in {secs:.0f}s "
+                  f"({per:.2f}s each with {cfg.openai.get('concurrency', 16)} in parallel)")
+            calls = max(1, scoring.USAGE["calls"] - calls_before)
+            print(f"  [sample] tokens per call: {scoring.USAGE['prompt_tokens'] / calls:,.0f} in, "
+                  f"{scoring.USAGE['completion_tokens'] / calls:,.0f} out (incl. reasoning)")
+            print(f"  [sample] the full pass would need ~{remaining:,} more calls: "
+                  f"about {remaining * per / 60:.0f} minutes")
+        pass_b = run_pass(cand_b, companies, texts, align, partner, cfg, caches, client)
+        passes[title] = pass_b
+    elif full:
+        passes = {"Top Matches - all companies": pass_a}
+
+    # ---------- Justifications for every top-20 company ----------
+    finals = list(dict.fromkeys(gi for p in passes.values() for gi in p["final"]))
+    funding, academic = {}, {}
+    for p in passes.values():
+        funding.update(p["funding"])
+        academic.update(p["academic"])
+    print(f"\n  [justification] writing {len(finals)} ...")
+    just = justifications(finals, companies, texts, sectors, profile, align, partner,
+                          funding, academic, cfg, client)
 
     # ---------- Build output ----------
-    results = []
-    for rank, gi in enumerate(final_ranked, start=1):
+    def row(gi, rank=None):
         c = companies[gi]
-        sec = secondary[gi]
-        results.append({
-            "rank": rank,
-            "company": c["company"],
-            "website": c.get("website"),
-            "distance_miles": c.get("distance_miles"),
-            "employees": c.get("employees"),
+        a = align.get(gi)
+        p = partner.get(gi)
+        return {
+            "rank": rank, "company": c["company"], "justification": just.get(gi),
+            "sector_match": sectors[gi] or None, "website": c.get("website"),
+            "distance_miles": c.get("distance_miles"), "employees": c.get("employees"),
             "revenue_usdmm": c.get("revenue_usdmm"),
-            "distance_score": c["distance_score"],
-            "employee_score": c["employee_score"],
+            "distance_score": c["distance_score"], "employee_score": c["employee_score"],
             "revenue_score": c["revenue_score"],
-            "alignment_score": align[gi]["score"],
-            "alignment_reason": align[gi]["reason"],
-            "partnership_score": sec["partnership"]["score"],
-            "partnership_reason": f'{sec["partnership"]["reason"]} | Track record {academic[gi][1]}',
-            "funding_score": sec["funding"]["score"],
-            "funding_reason": sec["funding"]["reason"],
-            "overall_score": overall[gi],
-            "description": c.get("description"),
-        })
+            "alignment_score": a["score"] if a else None,
+            "alignment_reason": a["reason"] if a else None,
+            "partnership_score": p["score"] if p else None,
+            "partnership_reason": (f'{p["reason"]} | Track record {academic[gi][1]}'
+                                   if p and gi in academic else (p["reason"] if p else None)),
+            "funding_score": funding[gi][0] if gi in funding else None,
+            "funding_reason": funding[gi][1] if gi in funding else None,
+            "company_profile": texts[gi] or None,
+        }
 
-    # ---------- All-companies rows (full funnel visibility) ----------
-    rank_of = {gi: rank for rank, gi in enumerate(final_ranked, start=1)}
+    tabs = {}
+    for title, p in passes.items():
+        rows = []
+        for rank, gi in enumerate(p["final"], start=1):
+            r = row(gi, rank)
+            r["overall_score"] = p["overall"][gi]
+            rows.append(r)
+        tabs[title] = rows
 
-    def stage_of(gi: int) -> str:
+    # All Companies: every company, from the widest pass
+    widest = pass_b or pass_a
+    final_n, cutoff = cfg.funnel["final_top_n"], cfg.funnel["secondary_cutoff"]
+    rank_of = {gi: k for k, gi in enumerate(widest["final"], start=1)}
+    sec_set, cand_set, in_a = set(widest["secondary"]), set(widest["candidates"]), set(cand_a)
+
+    def stage_of(gi):
         if gi in rank_of:
             return f"Top {final_n}"
-        if gi in secondary:
+        if gi in sec_set:
             return f"Secondary scored (top {cutoff})"
-        if gi in align:
+        if gi in cand_set:
+            if align.get(gi, {}).get("reason") == NO_TEXT_REASON:
+                return "Not scored (no description)"
             return "Alignment scored"
+        if not texts[gi]:
+            return "Not scored (no description)"
         return "Filtered out (pre-filter)"
 
-    def sort_key(gi: int):
+    def sort_key(gi):
         if gi in rank_of:
             return (0, rank_of[gi])
-        if gi in align:
-            return (1, -prelim[gi])
+        if gi in cand_set:
+            return (1, -widest["prelim"][gi])
         return (2, gi)
 
     all_rows = []
-    for gi in sorted(range(n_companies), key=sort_key):
-        c = companies[gi]
-        sec = secondary.get(gi)
-        all_rows.append({
-            "stage": stage_of(gi),
-            "rank": rank_of.get(gi),
-            "company": c["company"],
-            "website": c.get("website"),
-            "distance_miles": c.get("distance_miles"),
-            "employees": c.get("employees"),
-            "revenue_usdmm": c.get("revenue_usdmm"),
-            "distance_score": c["distance_score"],
-            "employee_score": c["employee_score"],
-            "revenue_score": c["revenue_score"],
-            "alignment_score": align[gi]["score"] if gi in align else None,
-            "alignment_reason": align[gi]["reason"] if gi in align else None,
-            "partnership_score": sec["partnership"]["score"] if sec else None,
-            "partnership_reason": (f'{sec["partnership"]["reason"]} | Track record '
-                                   f'{academic[gi][1]}') if sec else None,
-            "funding_score": sec["funding"]["score"] if sec else None,
-            "funding_reason": sec["funding"]["reason"] if sec else None,
-            "overall_score": overall.get(gi),
-            "description": c.get("description"),
-        })
+    for gi in sorted(range(n), key=sort_key):
+        r = row(gi, rank_of.get(gi))
+        r["stage"] = stage_of(gi)
+        r["in_prefilter"] = "Yes" if gi in in_a else "No"
+        r["overall_score"] = widest["overall"].get(gi)
+        if gi not in sec_set:
+            r["partnership_score"] = r["partnership_reason"] = None
+        all_rows.append(r)
 
     run_info = {
         "research_profile": profile,
-        "scoring_model": model,
+        "faculty_source": (f"Registration form, row {fac['row']}"
+                           if fac.get("source") == "registration" else "Faculty Database"),
+        "scoring_model": cfg.openai["scoring_model"],
         "embedding_model": cfg.openai["embedding_model"],
-        "n_companies": n_companies,
-        "n_candidates": len(candidate_idx),
+        "n_companies": n,
+        "n_candidates": len(cand_a),
+        "n_full": len(pass_b["candidates"]) if pass_b else None,
         "secondary_cutoff": cutoff,
-        "weights": w,
+        "weights": cfg.weights,
     }
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = unique_path(
-        cfg.output_dir / f"{safe_filename(fac['name'])} Match {stamp}.xlsx")
-    write_faculty_output(out_path, fac, results, run_info, all_rows=all_rows)
+    out_path = unique_path(cfg.output_dir / f"{safe_filename(fac['name'])} Match {stamp}.xlsx")
+    write_faculty_output(out_path, fac, tabs, run_info, all_rows=all_rows)
+    caches.save_all()
+    u = scoring.USAGE
+    print(f"\n  [usage] {u['calls']:,} AI calls, {u['prompt_tokens']:,} tokens in, "
+          f"{u['completion_tokens']:,} out, {time.time()-t_start:.0f}s")
     print(f"  [output] {out_path}")
     return str(out_path)
 
 
+# ----------------------------------------------------------------------
+# CLI
+# ----------------------------------------------------------------------
+
+def pick_faculty(args, cfg):
+    """-> (faculty list, error message or None)."""
+    reg_path = cfg.path("faculty_registration", REGISTRATION_DEFAULT)
+    if args.row is not None:
+        reg = read_registration(reg_path)
+        todo = [f for f in reg if f["row"] == args.row]
+        if not todo:
+            return [], (f"No faculty on row {args.row} of {reg_path.name}. Rows: "
+                        + ", ".join(f"{f['row']} {f['name']}" for f in reg))
+        return todo, None
+    if args.faculty:
+        target = " ".join(args.faculty.split()).lower()
+        pools = []
+        if reg_path.exists():
+            pools.append(read_registration(reg_path))
+        if cfg.faculty_database.exists():
+            pools.append(read_faculty(cfg.faculty_database, cfg.faculty))
+        for pool in pools:
+            todo = [f for f in pool if " ".join(f["name"].split()).lower() == target]
+            if todo:
+                return todo[:1], None
+        names = [f["name"] for pool in pools for f in pool]
+        return [], (f"Faculty '{args.faculty}' not found in the database.\n"
+                    "Names available: " + ", ".join(names))
+    return [f for f in read_faculty(cfg.faculty_database, cfg.faculty) if f["flag"] == "N"], None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Match faculty to companies.")
-    ap.add_argument("--faculty", help="Run only this faculty name (ignores flag).")
+    ap.add_argument("--faculty", help="Run this faculty (registration form first, "
+                                      "then the Faculty Database).")
+    ap.add_argument("--row", type=int, help="Run the faculty on this row of the "
+                                           "registration form (header = row 1).")
+    ap.add_argument("--no-full", action="store_true",
+                    help="Only the 300 pre-filter pass (skip scoring every company).")
+    ap.add_argument("--sample", type=int, default=0,
+                    help="Second pass on the pre-filter + N more companies only, and "
+                         "print what the full pass would take.")
     ap.add_argument("--dry-run", action="store_true",
                     help="Show what would run without any API calls.")
     args = ap.parse_args()
 
     cfg = Settings()
     caches = Caches(cfg.cache_dir)
-
     print("\n=== NexusAI Stage 1: Faculty Matching ===\n")
 
-    faculty_all = read_faculty(cfg.faculty_database, cfg.faculty)
-    if args.faculty:
-        target = args.faculty.strip().lower()
-        todo = [f for f in faculty_all if f["name"].lower() == target]
-        if not todo:
-            print(f"ERROR: Faculty '{args.faculty}' not found in the database.")
-            print("Names available: " + ", ".join(f["name"] for f in faculty_all))
-            return 1
-    else:
-        todo = [f for f in faculty_all if f["flag"] == "N"]
-
+    todo, err = pick_faculty(args, cfg)
+    if err:
+        print(f"ERROR: {err}")
+        return 1
     if not todo:
         print("No faculty with Flag = N. Nothing to do.")
         return 0
-
     print(f"Faculty to process: {', '.join(f['name'] for f in todo)}")
 
     companies_df = read_enriched(cfg.companies_enriched)
     companies = companies_df.where(companies_df.notna(), None).to_dict("records")
     print(f"Company datasource: {len(companies)} companies (enriched)")
+    full = not args.no_full and cfg.prefilter.get("full_run", True)
 
     if args.dry_run:
         top_n = cfg.prefilter["top_n_candidates"] if cfg.prefilter["enabled"] else 0
         n_cand = min(top_n, len(companies)) if top_n else len(companies)
-        est = n_cand + 2 * min(cfg.funnel["secondary_cutoff"], n_cand)
-        print(f"\n[dry-run] Per faculty: ~{n_cand} alignment calls + up to "
-              f"{2 * cfg.funnel['secondary_cutoff']} secondary calls "
-              f"(minus cache hits) = ~{est} LLM calls max.")
-        print(f"[dry-run] {len(todo)} faculty x ~{est} = "
-              f"~{len(todo) * est} calls upper bound. No API was called.")
+        n_text = sum(1 for c in companies if company_text(c))
+        n_full = (n_text if not args.sample else min(n_text, n_cand + args.sample)) if full else 0
+        sec = cfg.funnel["secondary_cutoff"]
+        print(f"\n[dry-run] Per faculty: ~{n_cand} alignment calls (pre-filter pass)"
+              + (f" + up to ~{max(0, n_full - n_cand):,} more (no pre-filter pass)" if full else "")
+              + f" + up to {2 * sec} partnership + {2 * cfg.funnel['final_top_n']} "
+              "justification calls, minus cache hits.")
+        print("[dry-run] No API was called.")
         return 0
 
     cfg.require_openai_key()
@@ -343,17 +534,21 @@ def main() -> int:
     done = 0
     for fac in todo:
         try:
-            match_one_faculty(fac, companies, cfg, caches, client)
-            set_faculty_flag(cfg.faculty_database, cfg.faculty, fac["row"], "Y")
-            print(f"  [flag] {fac['name']} -> Y")
+            match_one_faculty(fac, companies, cfg, caches, client, full=full,
+                              sample=args.sample)
+            if fac.get("source") != "registration":
+                set_faculty_flag(cfg.faculty_database, cfg.faculty, fac["row"], "Y")
+                print(f"  [flag] {fac['name']} -> Y")
             done += 1
         except KeyboardInterrupt:
-            print("\nInterrupted. Completed faculty are flagged Y; re-run to resume.")
+            print("\nInterrupted. Scores so far are cached - re-run to resume.")
             caches.save_all()
             return 130
         except Exception as e:
             print(f"  [ERROR] {fac['name']}: {e}")
-            print("  Flag left at N - this faculty will retry on next run.")
+            caches.save_all()
+            if fac.get("source") != "registration":
+                print("  Flag left at N - this faculty will retry on next run.")
 
     caches.save_all()
     print(f"\n{'='*60}")
