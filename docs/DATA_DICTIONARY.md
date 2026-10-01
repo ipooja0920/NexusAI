@@ -100,6 +100,23 @@ trials (never ran) are left out of every column; trials with status
 | ct_conditions | text | Diseases studied | Most trials first, top 10 then `(+N more)` | `Obesity; Type 2 Diabetes` | 909 |
 | ct_treatment_types | text | Kinds of treatment tested | Drug / Device / Biological / Procedure / …, most trials first ("Other" left out) | `Device; Drug` | 860 |
 
+### New fields — OpenAlex
+
+Added after the ClinicalTrials.gov block. From `data/cache/openalex_companies.csv`.
+OpenAlex names carry a country tag ("Pfizer (United States)"), which matching
+ignores; they rarely carry Inc / LLC, so most matches are confirmed by website.
+A company OpenAlex keeps twice (as a funder and as a publisher, unlinked) is
+treated as one.
+
+| Field | Type | Meaning | How it's derived | Example | Filled |
+|---|---|---|---|---|---|
+| oa_match_name | text | The company as OpenAlex names it | For unconfirmed rows, the candidate | `Abiomed (United States)` | 1,157 |
+| oa_match_by | text | How the match was made | `name`, `name+website`, `website`; or `unconfirmed` (similar name, website differs or missing) | `name+website` | 901 matched (91 name, 573 name+website, 237 website); 256 unconfirmed |
+| oa_topics | text | Its 5 most frequent research topics | From OpenAlex | `Computational Drug Discovery Methods; …` | 633 |
+| oa_funded_papers_by_year | text | Papers it funded, per year since 2005 | Newest first, years with none left out | `2025:3; 2024:1; 2023:1` | 220 |
+| oa_funded_university | True / False | A university or hospital (any country) wrote papers it funded since 2005 | | `True` | 217 True |
+| oa_coauthored_university | True / False | Its own staff wrote papers with a university or hospital since 2005 | | `True` | 702 True |
+
 ### Matching rules
 
 One rule for SBIR and Form D:

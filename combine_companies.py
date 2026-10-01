@@ -16,8 +16,24 @@ known to be the same company: same name AND the same website (or, with no
 website to compare, the same ZIP code). The row with the most fields filled
 in is kept (drop_duplicate_companies). No column is added for it.
 
-Sources so far: SBIR, Form D, SEC XBRL, then ClinicalTrials.gov. OpenAlex
-joins here later.
+Sources: SBIR, Form D, SEC XBRL, ClinicalTrials.gov, then OpenAlex.
+
+OPENALEX columns (from data/cache/openalex_companies.csv, built by
+clean_openalex.py). OpenAlex names carry a country tag - "Pfizer (United
+States)" - which the matching rule ignores, as it ignores any bracketed text
+or added country. OpenAlex names also rarely carry Inc / LLC, so most
+matches are confirmed by WEBSITE (match_company, rule 2 and 3).
+
+  oa_match_name             the company as OpenAlex names it
+  oa_match_by               name | name+website | website | ambiguous |
+                            unconfirmed
+  oa_topics                 its 5 most frequent research topics
+  oa_funded_papers_by_year  papers it funded, per year since 2005
+                            ("2025:12; 2024:8; ...")
+  oa_funded_university      True if a university or hospital (any country)
+                            wrote papers it funded since 2005, else False
+  oa_coauthored_university  True if its own staff wrote papers with a
+                            university or hospital since 2005, else False
 
 CLINICALTRIALS.GOV columns (from data/cache/ctgov_clean.csv, built by
 clean_clinicaltrials.py). Withdrawn trials never ran and are left out of
@@ -173,6 +189,11 @@ CT_TYPES = {"DRUG": "Drug", "DEVICE": "Device", "BIOLOGICAL": "Biological",
             "RADIATION": "Radiation", "DIETARY_SUPPLEMENT": "Dietary supplement",
             "GENETIC": "Genetic", "COMBINATION_PRODUCT": "Combination product",
             "DIAGNOSTIC_TEST": "Diagnostic test"}        # OTHER left out
+
+OA_COLUMNS = [
+    "oa_match_name", "oa_match_by", "oa_topics", "oa_funded_papers_by_year",
+    "oa_funded_university", "oa_coauthored_university",
+]
 
 XBRL_COLUMNS = [
     "xbrl_match_name", "xbrl_match_by",
@@ -543,6 +564,52 @@ def summarise_ctgov(path: Path) -> dict:
     return out
 
 
+# ----------------------------------------------------------------------
+# OpenAlex side: one summary per OpenAlex company
+# ----------------------------------------------------------------------
+
+def _add_years(cells) -> str | None:
+    """"2025:3; 2024:1" cells from two records of one company, added up."""
+    years = Counter()
+    for cell in cells:
+        if isinstance(cell, str):
+            for part in cell.split(";"):
+                y, _, n = part.strip().partition(":")
+                if y.strip().isdigit() and n.strip().isdigit():
+                    years[int(y)] += int(n)
+    return "; ".join(f"{y}:{years[y]}" for y in sorted(years, reverse=True)) or None
+
+
+def summarise_openalex(path: Path) -> dict:
+    """key -> summary, one per OpenAlex company.
+
+    OpenAlex sometimes keeps a company twice - once as a funder, once as a
+    publishing institution - without linking them ("Acorda Therapeutics"
+    and "Acorda Therapeutics (United States)"). Records with the SAME name
+    (name_parts: the country tag ignored) are one company here, so they are
+    not mistaken for two namesakes."""
+    c = pd.read_csv(path, dtype=str)
+    c["key"] = c["company"].map(ct_key)
+    out = {}
+    for key, g in c.groupby("key", sort=False):
+        if not key:
+            continue
+        txt = lambda col: next((v for v in g[col] if isinstance(v, str)), None)  # noqa: E731
+        name = txt("company")
+        out[key] = {
+            "name": name,
+            "norm": normalise_company_name(name),
+            "exacts": {name_parts(n) for n in g["company"]},
+            "domains": {d for d in g["website"].map(website_domain) if d},
+            "zips": set(),                                  # OpenAlex has no ZIP
+            "oa_topics": txt("topics"),
+            "oa_funded_papers_by_year": _add_years(g["funded_papers_by_year"]),
+            "oa_funded_university": bool(g["funded_universities"].notna().any()),
+            "oa_coauthored_university": bool(g["coauthor_universities"].notna().any()),
+        }
+    return out
+
+
 def _usdmm(v):
     """Dollars -> $ millions to 3 decimals, like Capital IQ's revenue."""
     return None if v is None or v != v else round(float(v) / 1e6, 3)
@@ -868,8 +935,39 @@ def main() -> int:
         print(f"  {ct_path.name} not found - run 'python clean_clinicaltrials.py'; "
               "ClinicalTrials.gov columns left blank")
 
+    # ---- OpenAlex ----
+    oa_path = cfg.cache_dir / "openalex_companies.csv"
+    oa_added = {c: [None] * len(raw) for c in OA_COLUMNS}
+    oa_counts = Counter()
+    if oa_path.exists():
+        oa = summarise_openalex(oa_path)
+        print(f"  OpenAlex companies     {len(oa):>7,}")
+        oa_by_name, oa_by_domain = defaultdict(list), defaultdict(set)
+        for k, v in oa.items():
+            if v["norm"]:
+                oa_by_name[v["norm"]].append(k)
+            for d in v["domains"]:
+                oa_by_domain[d].add(k)
+        oa_by_domain = {d: next(iter(k)) for d, k in oa_by_domain.items() if len(k) == 1}
+        for i, row in raw.iterrows():
+            k, how, note = match_company(row[name_col], row[site_col], None,
+                                         oa, oa_by_name, oa_by_domain)
+            oa_counts[how] += 1
+            if k is None:
+                if how in ("ambiguous", "unconfirmed"):
+                    oa_added["oa_match_by"][i] = how
+                    oa_added["oa_match_name"][i] = note
+                continue
+            oa_added["oa_match_name"][i] = oa[k]["name"]
+            oa_added["oa_match_by"][i] = how
+            for c in OA_COLUMNS[2:]:
+                oa_added[c][i] = oa[k][c]
+    else:
+        print(f"  {oa_path.name} not found - run 'python clean_openalex.py'; OpenAlex columns left blank")
+
     combined = pd.concat([raw, pd.DataFrame(added), pd.DataFrame(fd_added),
-                          pd.DataFrame(xb_added), pd.DataFrame(ct_added)], axis=1)
+                          pd.DataFrame(xb_added), pd.DataFrame(ct_added),
+                          pd.DataFrame(oa_added)], axis=1)
 
     # Revenue: Capital IQ first. Only where Capital IQ has NO figure is the
     # SEC figure used - however old - and revenue_source says so.
@@ -953,6 +1051,12 @@ def main() -> int:
     print(f"  with a running trial        {(combined['ct_trials_active'].fillna(0) > 0).sum():>7,}")
     print(f"  university current / past  {combined['ct_university_current'].notna().sum():>6,} / "
           f"{combined['ct_university_past'].notna().sum():,}")
+    oa_m = sum(oa_counts[h] for h in ("name", "name+website", "website"))
+    print(f"\n  OpenAlex matched       {oa_m:>7,}   (name {oa_counts['name']}, "
+          f"name+website {oa_counts['name+website']}, website {oa_counts['website']})")
+    print(f"  ambiguous / unconfirmed {oa_counts['ambiguous']:>4,} / {oa_counts['unconfirmed']:,}")
+    print(f"  funded a university    {(combined['oa_funded_university'] == True).sum():>7,}")
+    print(f"  co-wrote with one      {(combined['oa_coauthored_university'] == True).sum():>7,}")
     rs = combined["revenue_source"].fillna("")
     print(f"\n  revenue from Capital IQ    {(rs == 'Capital IQ').sum():>7,}")
     print(f"  revenue filled from SEC    {rs.str.startswith('SEC').sum():>7,}")
