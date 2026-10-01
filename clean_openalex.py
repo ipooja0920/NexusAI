@@ -3,7 +3,9 @@
 
   openalex_companies.csv   one row per OpenAlex US company
       company, website, city, research topics, papers it wrote per year
-      and papers it funded per year (since 2005)
+      and papers it funded per year (since 2005), and - from the ties file
+      below - the universities it funded and the ones it wrote papers with,
+      most papers first: "Harvard University (444); UCSF (417); ..."
 
   openalex_ties.csv        one row per company per UNIVERSITY / HOSPITAL
       role        funded      - the university wrote papers the company paid for
@@ -39,10 +41,28 @@ TOP_TOPICS = 5
 
 COMPANY_COLUMNS = ["institution_id", "funder_id", "company", "website", "city",
                    "topics", "papers_since_2005", "papers_by_year",
-                   "funded_papers_since_2005", "funded_papers_by_year"]
+                   "funded_papers_since_2005", "funded_papers_by_year",
+                   "funded_universities", "coauthor_universities"]
 TIE_COLUMNS = ["institution_id", "funder_id", "company", "role", "university",
                "university_id", "university_type", "university_country",
                "papers_2005_2023", "papers_2024_on", "papers_total"]
+
+
+CELL_LIMIT = 32_000      # Excel holds at most 32,767 characters in a cell
+
+
+def _fit(items: list) -> str | None:
+    """Join "; " until an Excel cell is full; the rest become "(+N more)".
+    Big pharma has thousands of partner universities - the full list is
+    always in openalex_ties.csv."""
+    out, used = [], 0
+    for i, x in enumerate(items):
+        if used + len(x) + 2 > CELL_LIMIT:
+            out.append(f"(+{len(items) - i} more)")
+            break
+        out.append(x)
+        used += len(x) + 2
+    return "; ".join(out) or None
 
 
 def short_id(url) -> str:
@@ -103,10 +123,20 @@ def clean(src: Path, raw_institutions: Path) -> tuple:
                     "papers_2005_2023": c["past"], "papers_2024_on": c["recent"],
                     "papers_total": c["past"] + c["recent"],
                 })
+    tie = pd.DataFrame(ties, columns=TIE_COLUMNS)
+    key = tie["institution_id"].fillna(tie["funder_id"])
+    for role, col in (("funded", "funded_universities"), ("coauthored", "coauthor_universities")):
+        lists = (tie[tie["role"] == role].assign(_k=key)
+                 .sort_values(["papers_total", "university"], ascending=[False, True])
+                 .groupby("_k").apply(lambda g: _fit(
+                     [f"{u} ({n})" for u, n in zip(g["university"], g["papers_total"])]),
+                     include_groups=False))
+        for c in companies:
+            c[col] = lists.get(c["institution_id"] or c["funder_id"])
     comp = pd.DataFrame(companies, columns=COMPANY_COLUMNS)
     for col in ("papers_since_2005", "funded_papers_since_2005"):
         comp[col] = comp[col].astype("Int64")
-    tie = pd.DataFrame(ties, columns=TIE_COLUMNS).sort_values(
+    tie = tie.sort_values(
         ["company", "role", "papers_total"], ascending=[True, True, False]).reset_index(drop=True)
     return comp, tie
 

@@ -261,6 +261,8 @@ match happens at the combine step.
 | topics | Its 5 most frequent research topics |
 | papers_since_2005, papers_by_year | Papers its own staff wrote, total and per year (`2025:40; 2024:35`) |
 | funded_papers_since_2005, funded_papers_by_year | Papers it funded, total and per year |
+| funded_universities | Universities / hospitals that wrote papers it funded, most papers first: `Harvard University (444); University of California, San Francisco (417); …` — all countries; if more than one Excel cell holds (big pharma), the smallest are counted as `(+N more)` — the full list is in openalex_ties.csv |
+| coauthor_universities | Universities / hospitals its staff wrote papers with, same format |
 
 **openalex_ties.csv** — one row per company per university / hospital
 
