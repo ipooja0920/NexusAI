@@ -11,6 +11,25 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 
 
+DEFAULT_FUNDING = {
+    "signals": {"formd_recent": {"lo": 0.5, "hi": 20}, "cash_total": {"lo": 5, "hi": 100},
+                "rd_expense": {"lo": 1, "hi": 50}, "sbir_active": {"lo": 0.1, "hi": 2}},
+    "oa_funded_from": 2025,
+    "recency": {"fresh_year": 2025, "fresh": 1.0, "recent": 0.6, "stale": 0.25},
+    "missing_score": 0.5, "formd_raised_bonus": 0.05, "formd_raised_revenue_max": 100,
+}
+
+DEFAULT_ACADEMIC = {
+    "bonus": {"oa_funded_university": 0.10, "sbir_university_past": 0.05,
+              "ct_university_past": 0.05, "oa_coauthored_university": 0.05,
+              "sbir_awarded": 0.03},
+    "bonus_cap": 0.15,
+    "penalty": {"sbir_university_current": -0.05, "ct_university_current": -0.05},
+    "penalty_cap": -0.10,
+    "ct_active_penalty": 0.0, "ct_active_above": 10,
+}
+
+
 class Settings:
     def __init__(self, config_path=None):
         # Resolved at call time (not import time) so the config location can
@@ -104,17 +123,13 @@ class Settings:
         """Funding-score thresholds. Defaults kept here so an older
         config.yaml without a `funding:` block still scores rather than
         raising KeyError halfway through a run."""
-        return self.raw.get("funding") or {
-            "activity": {"recent_lo": 100000, "recent_hi": 100000000,
-                         "rd_lo": 1000000, "rd_hi": 1000000000},
-            "size_fit": {"small_max": 5, "small_no_research": 0.15,
-                         "dip": 0.30, "sweet_lo": 100, "sweet_hi": 1000,
-                         "taper_zero": 5000, "missing_score": 0.5},
-            "recency": {"fresh_year": 2025, "fresh": 1.0,
-                        "recent": 0.6, "stale": 0.25},
-            "university": {"current_penalty": -0.15, "past_bonus": 0.05},
-            "missing_score": 0.5, "weight_activity": 0.6,
-        }
+        f = self.raw.get("funding") or {}
+        return f if "signals" in f else DEFAULT_FUNDING
+
+    @property
+    def academic(self) -> dict:
+        """Academic track-record adjustment to the partnership score."""
+        return self.raw.get("academic") or DEFAULT_ACADEMIC
 
     @property
     def geocoding(self) -> dict: return self.raw["geocoding"]

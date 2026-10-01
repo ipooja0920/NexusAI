@@ -291,6 +291,28 @@ match happens at the combine step.
 
 ---
 
+## 7. `data/companies_enriched.xlsx` — scores
+
+Built by `enrich_companies.py` from the combined file (every source column
+carried across). Settings in `config.yaml`.
+
+| Field | Meaning |
+|---|---|
+| distance_score | exp(−miles / 400) from UConn Storrs — unchanged |
+| employee_score | employees / 1,000, capped at 1 — unchanged |
+| revenue_score | Size fit: **1.0 for $100m–$1bn**; tapers to 0.2 at $5bn and stays 0.2; $5–100m = 0.4; under $5m = 0.2; no revenue = 0.5 |
+| funding_score | Money available now, best of: Form D raised since 2025 ($0.5m → 0, $20m → 1), SEC cash + short-term investments ($5m → 0, $100m → 1), SEC R&D ($1m → 0, $50m → 1), running SBIR/STTR awards ($0.1m → 0, $2m → 1), funded university papers in 2025+ (→ 1). Log scales; older figures pulled towards 0.5. No record = 0.5; Form D "raised: Yes" with nothing recent and revenue missing or < $100m = 0.55 |
+| funding_reason | The evidence behind it |
+| academic_adjustment | Added to the partnership score at match time: +0.10 funded university papers, +0.05 each past SBIR university partner / past trial partner / co-wrote with universities, +0.03 any SBIR award (bonus capped at +0.15); −0.05 each current SBIR or trial university partner (capped at −0.10). Running trials: no penalty (switchable in config) |
+| academic_reason | Which of those applied |
+| research_focus | OpenAlex topics, trial conditions and the 3 newest SBIR project titles — added to the description for the embedding and the AI alignment and partnership scoring |
+
+Final score (`match_faculty.py`, weights unchanged): alignment 30%, distance
+25%, partnership 15% (AI score + academic_adjustment), revenue 15%, funding
+10%, employees 5%.
+
+---
+
 ## Things to remember
 
 - **One row per company - only when known.** Capital IQ lists some companies

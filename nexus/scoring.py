@@ -209,19 +209,43 @@ def employee_score(employees: float, cap: float) -> float:
 
 
 def revenue_score(value: Optional[float], cfg: dict) -> float:
-    lo0, lo1 = cfg["rev_low_zero"], cfg["rev_low_full"]
-    hi1, hi0 = cfg["rev_high_full"], cfg["rev_high_zero"]
-    if value is None:
-        return cfg["rev_missing_score"]
-    if value <= lo0:
-        return 0.0
-    if value < lo1:
-        return value / lo1
-    if value <= hi1:
+    """SIZE fit from revenue ($USDmm), 0.0-1.0.
+
+    The target is an established company with a budget that still needs
+    outside research: full marks from sweet_lo ($100m) to sweet_hi ($1bn),
+    then a taper to big_floor at big_hi ($5bn), where it stays - the giants
+    rarely need UConn, but they do sometimes sponsor, so they are not zeroed.
+    Smaller companies get small_score / mid_score here and earn their place
+    through the funding score instead. No figure -> missing_score (neutral).
+
+    The previous curve peaked at $30-60m and reached ZERO at $1bn, so a
+    $500m company scored below a $40m one - the opposite of the "at least
+    $100m" rule.
+    """
+    v = _num(value)
+    if v is None:
+        return cfg["missing_score"]
+    if v < cfg["small_max"]:
+        return cfg["small_score"]
+    if v < cfg["sweet_lo"]:
+        return cfg["mid_score"]
+    if v <= cfg["sweet_hi"]:
         return 1.0
-    if value < hi0:
-        return (hi0 - value) / (hi0 - hi1)
-    return 0.0
+    if v < cfg["big_hi"]:
+        span = cfg["big_hi"] - cfg["sweet_hi"]
+        return 1.0 - (1.0 - cfg["big_floor"]) * (v - cfg["sweet_hi"]) / span
+    return cfg["big_floor"]
+
+
+def _num(value) -> Optional[float]:
+    """A float, or None for blank / NaN / "-" / junk."""
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if v != v else v
 
 
 def log_score(value: Optional[float], lo: float, hi: float) -> Optional[float]:
@@ -249,55 +273,6 @@ def log_score(value: Optional[float], lo: float, hi: float) -> Optional[float]:
     if v >= hi:
         return 1.0
     return (math.log10(v) - math.log10(lo)) / (math.log10(hi) - math.log10(lo))
-
-
-def size_fit(revenue_usdmm: Optional[float], researching: bool,
-             cfg: dict) -> float:
-    """How well a company's SIZE fits a sponsored-research partner, 0.0-1.0.
-
-    Deliberately not monotonic. The biggest companies are the worst targets,
-    not the best: Pfizer has the money and no need of us. Two shapes score
-    well, and the band between them is the weakest:
-
-      * small and doing research - pre-revenue biotech living on raised
-        money, which is exactly who partners with a university
-      * established but not enormous - has a budget, still needs outside
-        capability
-
-    `researching` is what separates a pre-revenue research company from a
-    small business with no research at all. Without it, every tiny company
-    in the datasource would score full marks.
-    """
-    # 71% of the datasource has no revenue figure. Absence is not evidence
-    # of smallness, so the research signal decides; with nothing at all to
-    # go on, stay neutral rather than guess.
-    #
-    # Note the NaN test. pandas reads a blank cell as NaN, NaN is not None,
-    # and EVERY comparison against NaN is False - so a plain `is None` check
-    # falls through the whole ladder and returns 0.0. That scored 15,275
-    # companies 0.30 instead of 0.50 on the first real run.
-    r = None
-    if revenue_usdmm is not None:
-        try:
-            r = float(revenue_usdmm)
-        except (TypeError, ValueError):
-            r = None
-        else:
-            if r != r:                        # NaN
-                r = None
-    if r is None:
-        return 1.0 if researching else cfg["missing_score"]
-
-    if r < cfg["small_max"]:
-        return 1.0 if researching else cfg["small_no_research"]
-    if r < cfg["sweet_lo"]:
-        return cfg["dip"]
-    if r <= cfg["sweet_hi"]:
-        return 1.0
-    if r < cfg["taper_zero"]:
-        span = cfg["taper_zero"] - cfg["sweet_hi"]
-        return max(0.0, 1.0 - (r - cfg["sweet_hi"]) / span)
-    return 0.0
 
 
 def _year(value) -> Optional[int]:
@@ -334,29 +309,6 @@ def recency_factor(years, cfg: dict) -> float:
     return cfg["stale"]
 
 
-def university_adjustment(current, past, cfg: dict) -> float:
-    """A signed nudge for existing academic ties.
-
-    The two directions are deliberately opposite, and the asymmetry is the
-    point:
-
-      * a CURRENT university partner counts AGAINST a company. The budget
-        and the appetite are already spoken for, so there is less room for
-        a new partnership - which is what we are looking for.
-
-      * a PAST tie counts slightly FOR it. The company has worked with
-        academia before, knows how a sponsored-research agreement works,
-        and is not starting from scratch. Slightly - a finished
-        relationship is weaker evidence than a live one is an obstacle.
-    """
-    adj = 0.0
-    if _nonblank(current):
-        adj += cfg["current_penalty"]
-    if _nonblank(past):
-        adj += cfg["past_bonus"]
-    return adj
-
-
 def _nonblank(value) -> bool:
     """True when a text cell actually holds something. NaN is truthy in
     Python, so a plain `if value` reports every blank cell as populated."""
@@ -367,77 +319,62 @@ def _nonblank(value) -> bool:
     return str(value).strip() not in ("", "-", "nan", "None")
 
 
-def funding_score(funding_recent_usd: Optional[float],
-                  rd_expense_usd: Optional[float],
-                  revenue_usdmm: Optional[float],
-                  cfg: dict,
-                  years=(),
-                  university_current=None,
-                  university_past=None) -> float:
-    """Can this company pay for research, and is it the right size to want to?
+def money_score(signals: dict, cfg: dict, oa_funded_recent: bool = False,
+                formd_raised_small: bool = False) -> tuple:
+    """Is there money available NOW? -> (score 0.0-1.0, the signal that won).
 
-    Replaces an LLM judgement of the same question. Every input here is a
-    figure from a filing - a Form D raise, an SBIR award, an XBRL R&D line -
-    so the answer is reproducible and can be traced back to a document.
+    `signals` is {name: (amount in $ millions, year it describes)} for
+    formd_recent, cash_total, rd_expense and sbir_active. Each is placed on
+    its own log scale from config and aged by its year: an old figure is
+    pulled TOWARDS neutral, never below it - old money is a weaker claim,
+    not a mark against.
 
-    Two kinds of evidence, combined with max() rather than a sum or a mean:
-    they are independent signals of the same capacity, and a company should
-    not be marked down for having only one. Big pharma files no Form D
-    because it raises no private capital; a biotech that just closed a
-    Series B reports no R&D line. Averaging would halve both.
+    The BEST signal counts - max, not a sum: a company with both cash in
+    the bank and a recent raise has the same answer twice, not a bigger one,
+    and a company should not lose for having only one kind of record.
+
+    oa_funded_recent (it paid for university papers this year or last) is
+    full marks on its own. With no signal at all the score is neutral
+    (missing_score) - plus a small bonus when the company has raised
+    private money at some point and is small or of unknown size.
     """
-    act = cfg["activity"]
-    activity_signals = [
-        s for s in (log_score(funding_recent_usd, act["recent_lo"], act["recent_hi"]),
-                    log_score(rd_expense_usd, act["rd_lo"], act["rd_hi"]))
-        if s is not None
-    ]
-    activity = max(activity_signals) if activity_signals else None
-    fit = size_fit(revenue_usdmm, bool(activity_signals), cfg["size_fit"])
+    neutral = cfg["missing_score"]
+    scored = []
+    for name, (amount, year) in signals.items():
+        lim = cfg["signals"][name]
+        s = log_score(amount, lim["lo"], lim["hi"])
+        if s is None:
+            continue
+        factor = recency_factor([year] if year is not None else [], cfg["recency"])
+        scored.append((neutral + (s - neutral) * factor if s > neutral else s, name))
+    if oa_funded_recent:
+        scored.append((1.0, "oa_funded"))
+    if not scored:
+        bonus = cfg["formd_raised_bonus"] if formd_raised_small else 0.0
+        return round(min(1.0, neutral + bonus), 4), None
+    best = max(scored)
+    return round(min(1.0, max(0.0, best[0])), 4), best[1]
 
-    w = cfg["weight_activity"]
-    # No activity figure at all -> neutral on that half, NOT zero. Absence of
-    # a Form D filing means we found no record, not that a company has no
-    # money; most established companies never file one. Scoring it zero would
-    # push down the 98% we know nothing about instead of lifting the 2% we
-    # have evidence for.
-    activity_part = activity if activity is not None else cfg["missing_score"]
 
-    # Age the evidence by pulling it TOWARDS NEUTRAL, not towards zero.
-    #
-    # Multiplying by the factor was the obvious thing and it was wrong:
-    # Bristol-Myers, with $9.95bn of undated R&D, scored 0.15 against 0.30
-    # for an identical company with no R&D data at all. Evidence must never
-    # leave a company worse off than having none.
-    #
-    # Shrinking towards missing_score says the honest thing instead - old
-    # money is a weaker claim, not a mark against. A stale $200m raise still
-    # beats an unknown; a fresh figure is untouched; and a genuinely tiny
-    # raise still reads as tiny rather than being laundered up to neutral.
-    if activity is not None:
-        neutral = cfg["missing_score"]
-        factor = recency_factor(years, cfg["recency"])
-        activity_part = neutral + (activity_part - neutral) * factor
+def academic_adjustment(flags: dict, ct_active, cfg: dict) -> tuple:
+    """Signed nudge to the partnership score from the academic track record
+    -> (adjustment, [names of the signals that applied]).
 
-    score = w * activity_part + (1.0 - w) * fit
-
-    # With no funding or R&D record, size_fit is the only term left - and
-    # size_fit is just revenue. Left unchecked that turned this column into
-    # a second revenue score: a regional insurer with $450m of premiums and
-    # no research of any kind read 0.70 for "can they fund research", while
-    # a $38m catalysis firm read 0.42. Revenue already carries its own
-    # weight, so this also counted it twice.
-    #
-    # Size can still show a company is a POOR target - a $60bn pharma does
-    # not need us - but it can never show one is a good one. So without
-    # evidence the score is capped at neutral: the giants keep their
-    # penalty, nobody is promoted for merely being large.
-    if activity is None:
-        score = min(score, cfg["missing_score"])
-
-    score += university_adjustment(university_current, university_past,
-                                   cfg["university"])
-    return round(min(1.0, max(0.0, score)), 4)
+    Past ties (and having paid for university research) count FOR a
+    company: it knows how a sponsored-research agreement works. A CURRENT
+    university partner counts against it: less room for UConn. Each side is
+    capped, so one company with every kind of tie cannot swamp the AI
+    partnership judgement it adjusts.
+    """
+    bonus = sum(v for k, v in cfg["bonus"].items() if flags.get(k))
+    penalty = sum(v for k, v in cfg["penalty"].items() if flags.get(k))
+    used = [k for k in list(cfg["bonus"]) + list(cfg["penalty"]) if flags.get(k)]
+    adj = min(bonus, cfg["bonus_cap"]) + max(penalty, cfg["penalty_cap"])
+    n_active = _num(ct_active) or 0
+    if cfg.get("ct_active_penalty") and n_active > cfg.get("ct_active_above", 0):
+        adj += cfg["ct_active_penalty"]
+        used.append("ct_trials_active")
+    return round(adj, 4), used
 
 
 def normalize(values: List[Optional[float]]) -> List[float]:

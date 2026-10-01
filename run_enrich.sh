@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Run Stage 0 enrichment detached, so the Terminal window can be closed.
+# Rebuild the combined file, then run Stage 0 enrichment detached, so the
+# Terminal window can be closed once it says "started".
 #
 #   ./run_enrich.sh                    # normal run
 #   ./run_enrich.sh --skip-embeddings  # any enrich_companies.py flag works
@@ -76,6 +77,16 @@ if ! "$PY" -c "import pandas, openpyxl" 2>/dev/null; then
 fi
 
 LOG="$LOG_DIR/enrich_$(date +%Y%m%d_%H%M%S).log"
+
+# Enrichment reads companies_combined.xlsx, so rebuild it first from the
+# Capital IQ export and the clean source files. Takes a couple of minutes,
+# in the foreground - wait for "started" before closing the window.
+echo "  building the combined file (combine_companies.py)..."
+if ! "$PY" -u combine_companies.py > "$LOG_DIR/combine_last.log" 2>&1; then
+  echo "  combine_companies.py failed - see $LOG_DIR/combine_last.log"
+  exit 1
+fi
+grep -E "written|matched" "$LOG_DIR/combine_last.log" | sed 's/^/  /' | tail -6
 
 # -u so the log fills live; python buffers stdout when it is not a terminal,
 # which makes tail -f look frozen for minutes at a time.

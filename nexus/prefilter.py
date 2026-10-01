@@ -28,12 +28,23 @@ def embed_text(client, model: str, text: str, caches=None) -> Optional[list]:
     return vec
 
 
-def company_embedding_text(name: str, description: Optional[str]) -> str:
-    """Text used to represent a company in embedding space."""
-    desc = (description or "").strip()
-    if desc in ("", "-", "nan"):
-        desc = ""
+def company_embedding_text(name: str, description: Optional[str],
+                           research_focus: Optional[str] = None) -> str:
+    """Text used to represent a company in embedding space: name, Capital IQ
+    description, and - where the sources know it - what it researches
+    (trial conditions, OpenAlex topics, SBIR project titles)."""
+    desc = company_profile_text(description, research_focus)
     return f"{name}. {desc}".strip()
+
+
+def company_profile_text(description: Optional[str],
+                         research_focus: Optional[str] = None) -> str:
+    """Description plus research focus - what the alignment scorer reads."""
+    def clean(v):
+        v = "" if v is None else str(v).strip()
+        return "" if v in ("", "-", "nan", "None") else v
+    desc, focus = clean(description), clean(research_focus)
+    return f"{desc}\n\nResearch focus: {focus}".strip() if focus else desc
 
 
 def rank_by_similarity(profile_vector: Sequence[float],

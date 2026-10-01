@@ -158,49 +158,94 @@ def funding_columns(key: str, caches: dict) -> dict:
     }
 
 
+def _yes(value) -> bool:
+    """True for True / "True" / "Yes" (Excel and pandas spell it all ways)."""
+    return str(value).strip().lower() in ("true", "yes", "1")
+
+
+def _num_or_none(value):
+    return None if _is_missing(value) else float(value)
+
+
+def _year_of(value):
+    from nexus.scoring import _year
+    if isinstance(value, str) and len(value) >= 4:
+        return _year(value[:4])
+    return _year(value)
+
+
 def company_funding_score(company: dict, cfg: dict) -> tuple:
-    """(score, reason) for one enriched company row.
+    """(score, reason) - is there money available NOW? - for one company
+    row of the combined / enriched sheet.
 
-    The bridge between the workbook and nexus.scoring.funding_score: pulls
-    the figures and the dates out of a row and returns a score plus a short
-    human-readable justification.
-
-    The reason string matters as much as the number. It replaced an LLM
-    sentence in the same column, and a bare 0.74 with nothing behind it is
-    less useful than the guess it replaced - so it names the evidence.
+    Reads the source columns combine_companies.py attached and hands them
+    to nexus.scoring.money_score. The reason names the evidence, because a
+    bare 0.74 is less useful than the sentence it replaced.
     """
-    from nexus.scoring import (_nonblank, _year, funding_score,
-                               recency_factor)
+    from nexus.scoring import money_score
+    fresh = cfg["recency"]["fresh_year"]
+    signals = {
+        # Form D money counted from 2025 on, SBIR awards still running:
+        # both are current by definition
+        "formd_recent": (_num_or_none(company.get("formd_recent_usdmm")), fresh),
+        "sbir_active": (_num_or_none(company.get("sbir_active_usdmm")), fresh),
+        "cash_total": (_num_or_none(company.get("xbrl_cash_total_usdmm")),
+                       _year_of(company.get("xbrl_cash_as_of"))),
+        "rd_expense": (_num_or_none(company.get("xbrl_rd_expense_usdmm")),
+                       _year_of(company.get("xbrl_rd_year"))),
+    }
+    last_funded = _year_of(company.get("oa_last_funded_year"))
+    oa_recent = (_yes(company.get("oa_funded_university"))
+                 and last_funded is not None and last_funded >= cfg["oa_funded_from"])
+    revenue = _num_or_none(company.get("revenue_usdmm"))
+    small = revenue is None or revenue < cfg["formd_raised_revenue_max"]
+    raised_small = _yes(company.get("formd_raised")) and small
 
-    recent = company.get("funding_recent_usd")
-    rd = company.get("rd_expense_usd")
-    revenue = company.get("revenue_usdmm")
-    years = [company.get("formd_last_year"),
-             company.get("sbir_last_year"),
-             company.get("rd_expense_year")]
-    current = company.get("university_current")
-    past = company.get("university_past")
+    score, best = money_score(signals, cfg, oa_funded_recent=oa_recent,
+                              formd_raised_small=raised_small)
 
-    score = funding_score(recent, rd, revenue, cfg, years=years,
-                          university_current=current, university_past=past)
-
-    bits = []
-    if not _is_missing(recent):
-        bits.append(f"${float(recent)/1e6:,.1f}m raised recently")
-    if not _is_missing(rd):
-        bits.append(f"${float(rd)/1e6:,.0f}m R&D")
-    if not _is_missing(revenue):
-        bits.append(f"${float(revenue):,.0f}m revenue")
-    known = [y for y in (_year(v) for v in years) if y is not None]
-    if known:
-        bits.append(f"latest {max(known)}")
-    if _nonblank(current):
-        bits.append("already has a university partner")
-    if _nonblank(past):
-        bits.append("previous university ties")
+    labels = {"formd_recent": "raised ${:,.1f}m since 2025 (Form D)",
+              "sbir_active": "${:,.1f}m of SBIR/STTR awards running",
+              "cash_total": "${:,.0f}m cash + short-term investments",
+              "rd_expense": "${:,.0f}m R&D"}
+    bits = [labels[k].format(v) for k, (v, _) in signals.items() if v is not None]
+    if oa_recent:
+        bits.append(f"funded university research in {last_funded}")
     if not bits:
-        return score, "No funding, R&D or revenue record found."
+        if raised_small:
+            return score, "Raised private money before (Form D), nothing recent."
+        return score, "No funding record found - neutral."
     return score, "; ".join(bits) + "."
+
+
+def company_academic_adjustment(company: dict, cfg: dict) -> tuple:
+    """(adjustment, reason) - the academic track record that nudges the
+    partnership score, from the SBIR, ClinicalTrials.gov and OpenAlex
+    columns."""
+    from nexus.scoring import _nonblank, academic_adjustment
+    flags = {
+        "oa_funded_university": _yes(company.get("oa_funded_university")),
+        "oa_coauthored_university": _yes(company.get("oa_coauthored_university")),
+        "sbir_university_past": _nonblank(company.get("university_past")),
+        "ct_university_past": _nonblank(company.get("ct_university_past")),
+        "sbir_awarded": _yes(company.get("sbir_awarded")),
+        "sbir_university_current": _nonblank(company.get("university_current")),
+        "ct_university_current": _nonblank(company.get("ct_university_current")),
+    }
+    adj, used = academic_adjustment(flags, company.get("ct_trials_active"), cfg)
+    words = {
+        "oa_funded_university": "paid for university research (OpenAlex)",
+        "oa_coauthored_university": "co-wrote papers with universities",
+        "sbir_university_past": "past SBIR/STTR university partner",
+        "ct_university_past": "past clinical-trial university partner",
+        "sbir_awarded": "SBIR/STTR award history",
+        "sbir_university_current": "current SBIR/STTR university partner",
+        "ct_university_current": "current clinical-trial university partner",
+        "ct_trials_active": "many running clinical trials",
+    }
+    if not used:
+        return 0.0, "No academic track record found."
+    return adj, f"{adj:+.2f}: " + "; ".join(words[u] for u in used) + "."
 
 
 def _is_missing(value) -> bool:

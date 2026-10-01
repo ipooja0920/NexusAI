@@ -10,8 +10,8 @@ from nexus.scoring import (STD_NA_REASON, _parse_score_reason, distance_score,
                            employee_score, normalize, parse_employees,
                            parse_revenue, revenue_score)
 
-REV_CFG = {"rev_low_zero": 0.0, "rev_low_full": 30.0, "rev_high_full": 60.0,
-           "rev_high_zero": 1000.0, "rev_missing_score": 0.5}
+REV_CFG = {"small_max": 5, "small_score": 0.2, "mid_score": 0.4, "sweet_lo": 100,
+           "sweet_hi": 1000, "big_hi": 5000, "big_floor": 0.2, "missing_score": 0.5}
 
 
 class TestParseRevenue(unittest.TestCase):
@@ -98,34 +98,33 @@ class TestEmployeeScore(unittest.TestCase):
 
 
 class TestRevenueScore(unittest.TestCase):
+    """Size fit: full marks $100m - $1bn ("at least $100m"), giants marked
+    down but not zeroed, small companies left to the funding score."""
+
     def test_missing_is_neutral(self):
         self.assertEqual(revenue_score(None, REV_CFG), 0.5)
+        self.assertEqual(revenue_score(float("nan"), REV_CFG), 0.5)
+        self.assertEqual(revenue_score("-", REV_CFG), 0.5)
 
-    def test_zero_revenue(self):
-        self.assertEqual(revenue_score(0.0, REV_CFG), 0.0)
+    def test_small_and_mid(self):
+        self.assertEqual(revenue_score(0.0, REV_CFG), 0.2)
+        self.assertEqual(revenue_score(4.9, REV_CFG), 0.2)
+        self.assertEqual(revenue_score(5.0, REV_CFG), 0.4)
+        self.assertEqual(revenue_score(99.0, REV_CFG), 0.4)
 
-    def test_ramp_up_below_ideal(self):
-        self.assertAlmostEqual(revenue_score(15.0, REV_CFG), 0.5)
+    def test_sweet_spot_is_full_marks(self):
+        for v in (100, 450, 1000):
+            self.assertEqual(revenue_score(v, REV_CFG), 1.0)
 
-    def test_ideal_band_is_full_marks(self):
-        self.assertEqual(revenue_score(30.0, REV_CFG), 1.0)
-        self.assertEqual(revenue_score(45.0, REV_CFG), 1.0)
-        self.assertEqual(revenue_score(60.0, REV_CFG), 1.0)
+    def test_500m_now_beats_40m(self):
+        """The old curve peaked at $30-60m and hit zero at $1bn."""
+        self.assertGreater(revenue_score(500, REV_CFG), revenue_score(40, REV_CFG))
 
-    def test_decline_above_ideal(self):
-        mid = revenue_score(530.0, REV_CFG)     # halfway 60 -> 1000
-        self.assertGreater(mid, 0.4)
-        self.assertLess(mid, 0.6)
-
-    def test_very_large_revenue_scores_zero(self):
-        # This is the deliberate big-company penalty.
-        self.assertEqual(revenue_score(1000.0, REV_CFG), 0.0)
-        self.assertEqual(revenue_score(500_000.0, REV_CFG), 0.0)
-
-    def test_monotonic_within_each_side(self):
-        rising = [revenue_score(v, REV_CFG) for v in [1, 5, 10, 20, 29]]
-        self.assertEqual(rising, sorted(rising))
-        falling = [revenue_score(v, REV_CFG) for v in [61, 200, 600, 999]]
+    def test_taper_then_floor_for_giants(self):
+        self.assertAlmostEqual(revenue_score(3000, REV_CFG), 0.6)
+        self.assertEqual(revenue_score(5000, REV_CFG), 0.2)
+        self.assertEqual(revenue_score(60_000, REV_CFG), 0.2)
+        falling = [revenue_score(v, REV_CFG) for v in (1000, 2000, 3500, 4999)]
         self.assertEqual(falling, sorted(falling, reverse=True))
 
 

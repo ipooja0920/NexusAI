@@ -203,6 +203,7 @@ class TempProject:
             "companies_raw": str(self.dir / "data" / "input" / "companies_raw.xlsx"),
             "faculty_database": str(self.dir / "data" / "input" / "Faculty Database.xlsx"),
             "companies_enriched": str(self.dir / "data" / "companies_enriched.xlsx"),
+            "companies_combined": str(self.dir / "data" / "companies_combined.xlsx"),
             "sources_dir": str(self.dir / "data" / "sources"),
             "cache_dir": str(self.dir / "data" / "cache"),
             "review_dir": str(self.dir / "data" / "review"),
@@ -301,8 +302,16 @@ class TempProject:
             else:
                 os.environ["NEXUSAI_CONFIG"] = old_env
 
+    def run_combine(self) -> int:
+        """Attach the (here: absent) source files to Capital IQ."""
+        return self._run("combine_companies", "combine_companies.py", [])
+
     def run_enrich(self, argv=None) -> int:
-        """Run Stage 0 against this temp project."""
+        """Run Stage 0 against this temp project - combine first, as the
+        real pipeline does, so enrichment reads the combined file."""
+        rc = self.run_combine()
+        if rc != 0:
+            return rc
         return self._run("enrich_companies", "enrich_companies.py", argv)
 
     def run_match(self, argv=None) -> int:

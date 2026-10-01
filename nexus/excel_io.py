@@ -109,11 +109,11 @@ ENRICHED_COLUMNS = [
 ]
 
 
-def write_enriched(path: Path, records: List[dict]) -> None:
+def write_enriched(path: Path, records: List[dict], columns: List[str] = None) -> None:
     """Rebuild the enriched file from scratch. Always a full overwrite: the
     raw datasource is the single source of truth, so stale rows can never
     linger from a previous run."""
-    df = pd.DataFrame(records, columns=ENRICHED_COLUMNS)
+    df = pd.DataFrame(records, columns=columns or ENRICHED_COLUMNS)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with pd.ExcelWriter(path, engine="openpyxl") as writer:

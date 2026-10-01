@@ -241,7 +241,8 @@ class TestEnrichedCarriesTheFundingScore(PipelineTestCase):
             col = hdr.index("funding_reason") + 1
             reasons = [ws.cell(r, col).value for r in range(2, ws.max_row + 1)]
             self.assertTrue(all(r and str(r).strip() for r in reasons))
-            self.assertTrue(any("revenue" in str(r) for r in reasons))
+            # the fixture has no source files, so every company is neutral
+            self.assertTrue(all("neutral" in str(r) for r in reasons))
         finally:
             p.__exit__()
 

@@ -19,10 +19,11 @@ import time
 from datetime import datetime
 
 from nexus.cache import Caches
-from nexus.funding import company_funding_score
+from nexus.funding import company_academic_adjustment, company_funding_score
 from nexus.excel_io import (read_enriched, read_faculty, set_faculty_flag,
                             unique_path, write_faculty_output)
-from nexus.prefilter import embed_text, rank_by_similarity, select_candidates
+from nexus.prefilter import (company_profile_text, embed_text, rank_by_similarity,
+                             select_candidates)
 from nexus.scoring import (FUNDING_SYSTEM_PROMPT, PARTNERSHIP_SYSTEM_PROMPT,
                            normalize, score_alignment, score_secondary)
 from nexus.settings import Settings
@@ -98,7 +99,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches,
         company_vecs = []
         for c in companies:
             from nexus.prefilter import company_embedding_text
-            text = company_embedding_text(c["company"], c.get("description"))
+            text = company_embedding_text(c["company"], c.get("description"),
+                                          c.get("research_focus"))
             company_vecs.append(caches.get_embedding(text))
         n_missing = sum(1 for v in company_vecs if v is None)
         if n_missing:
@@ -120,7 +122,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches,
     for k, gi in enumerate(candidate_idx):
         c = companies[gi]
         score, reason = score_alignment(
-            client, model, c["company"], c.get("description"), profile,
+            client, model, c["company"],
+            company_profile_text(c.get("description"), c.get("research_focus")), profile,
             max_retries=retries, rate_limit=rate)
         align[gi] = {"score": score, "reason": reason}
         if (k + 1) % 20 == 0 or (k + 1) == len(candidate_idx):
@@ -156,7 +159,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches,
     for k, gi in enumerate(top_secondary):
         c = companies[gi]
         partnership, funding, was_cached = get_secondary_scores(
-            client, cfg, caches, c["company"], c.get("description"), c)
+            client, cfg, caches, c["company"],
+            company_profile_text(c.get("description"), c.get("research_focus")), c)
         secondary[gi] = {"partnership": partnership, "funding": funding}
         n_cache_hits += was_cached
         if (k + 1) % 10 == 0 or (k + 1) == len(top_secondary):
@@ -179,6 +183,14 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches,
     # a ranking out of nothing.
     f_norm = {gi: secondary[gi]["funding"]["score"] for gi in secondary}
 
+    # The AI partnership judgement, nudged by the measured academic track
+    # record (past university ties up, a current partner down - capped, see
+    # config `academic`). Added AFTER normalising, so the nudge keeps its
+    # absolute size instead of being stretched by the pool.
+    academic = {gi: company_academic_adjustment(companies[gi], cfg.academic)
+                for gi in secondary}
+    p_adj = {gi: min(1.0, max(0.0, p_norm[gi] + academic[gi][0])) for gi in secondary}
+
     overall = {}
     for gi in top_secondary:
         c = companies[gi]
@@ -186,7 +198,7 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches,
                        w["employees"] * c["employee_score"] +
                        w["revenue"] * c["revenue_score"] +
                        w["alignment"] * align_norm[gi] +
-                       w["partnership"] * p_norm[gi] +
+                       w["partnership"] * p_adj[gi] +
                        w["funding"] * f_norm.get(gi, cfg.funding["missing_score"]))
 
     final_n = cfg.funnel["final_top_n"]
@@ -210,7 +222,7 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches,
             "alignment_score": align[gi]["score"],
             "alignment_reason": align[gi]["reason"],
             "partnership_score": sec["partnership"]["score"],
-            "partnership_reason": sec["partnership"]["reason"],
+            "partnership_reason": f'{sec["partnership"]["reason"]} | Track record {academic[gi][1]}',
             "funding_score": sec["funding"]["score"],
             "funding_reason": sec["funding"]["reason"],
             "overall_score": overall[gi],
@@ -254,7 +266,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches,
             "alignment_score": align[gi]["score"] if gi in align else None,
             "alignment_reason": align[gi]["reason"] if gi in align else None,
             "partnership_score": sec["partnership"]["score"] if sec else None,
-            "partnership_reason": sec["partnership"]["reason"] if sec else None,
+            "partnership_reason": (f'{sec["partnership"]["reason"]} | Track record '
+                                   f'{academic[gi][1]}') if sec else None,
             "funding_score": sec["funding"]["score"] if sec else None,
             "funding_reason": sec["funding"]["reason"] if sec else None,
             "overall_score": overall.get(gi),

@@ -808,16 +808,19 @@ def main() -> int:
     out_path = cfg.path("companies_combined", "data/companies_combined.xlsx")
 
     print("\n=== NexusAI: combine companies + sources ===\n")
-    if not sbir_path.exists():
-        print(f"  {sbir_path} not found - run 'python clean_sbir.py' first.")
-        return 1
 
     raw, name_col, site_col, addr_col, emp_col = read_raw(cfg)
     raw, dropped = drop_duplicate_companies(raw, name_col, site_col, addr_col)
     print(f"  Capital IQ companies   {len(raw):>7,}   ({len(dropped)} repeated rows of the "
           "same company left out)")
-    sbir = summarise_sbir(sbir_path)
-    print(f"  SBIR companies         {len(sbir):>7,}")
+    # Every source is optional: a missing clean file leaves its columns blank
+    # (blank, not "No" - without the file we do not know).
+    have_sbir = sbir_path.exists()
+    sbir = summarise_sbir(sbir_path) if have_sbir else {}
+    if have_sbir:
+        print(f"  SBIR companies         {len(sbir):>7,}")
+    else:
+        print(f"  {sbir_path.name} not found - run 'python clean_sbir.py'; SBIR columns left blank")
     by_name, by_domain = build_indexes(sbir)
 
     added = {c: [] for c in SBIR_COLUMNS}
@@ -835,7 +838,7 @@ def main() -> int:
                 added["sbir_match_by"][-1] = how
                 added["sbir_match_name"][-1] = note
                 # it may well have awards - we just cannot say whose
-            else:
+            elif have_sbir:
                 added["sbir_awarded"][-1] = "No"
             continue
         s = sbir[k]
