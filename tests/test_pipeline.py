@@ -93,7 +93,7 @@ class TestFullRun(PipelineTestCase):
             ws = openpyxl.load_workbook(p.outputs()[0])["All Companies"]
             self.assertEqual(ws.max_row - 1, 8)          # all 8 fixtures present
             stages = {ws.cell(r, 1).value for r in range(2, ws.max_row + 1)}
-            self.assertTrue(stages <= {"Top 20", "Secondary scored (top 40)",
+            self.assertTrue(stages <= {"Top 50", "Secondary scored (top 100)",
                                        "Alignment scored", "Filtered out (pre-filter)",
                                        "Not scored (no description)", "Alignment below 5"})
         finally:
@@ -290,8 +290,7 @@ class TestPrefilterActivation(PipelineTestCase):
             self.assertEqual(counts.get("alignment", 0), 7)
             self.assertEqual(counts.get("embedding", 0), 1, "faculty profile embedded once")
             wb = openpyxl.load_workbook(p.outputs()[0])
-            self.assertIn("Small - 3 pre-filter", wb.sheetnames)
-            self.assertIn("Small - all companies", wb.sheetnames)
+            self.assertIn("Small - top 50 (all companies)", wb.sheetnames)
             ws = wb["All Companies"]
             inpf = column(ws, "In Pre-filter")
             self.assertEqual([ws.cell(r, inpf).value for r in range(2, ws.max_row + 1)].count("Yes"), 3)
@@ -397,10 +396,11 @@ class TestSizeTiers(PipelineTestCase):
             p.run_enrich()
             p.run_match()
             wb = openpyxl.load_workbook(p.outputs()[0])
-            self.assertEqual(wb.sheetnames, ["Small - all companies", "Mid ($100m-$1bn)",
+            self.assertEqual(wb.sheetnames, ["Small - top 50 (all companies)",
+                                             "Mid ($100m-$1bn) - top 50",
                                              "All Companies", "Run Info"])
-            mid = {wb["Mid ($100m-$1bn)"].cell(r, 2).value
-                   for r in range(2, wb["Mid ($100m-$1bn)"].max_row + 1)}
+            m = wb["Mid ($100m-$1bn) - top 50"]
+            mid = {m.cell(r, 2).value for r in range(2, m.max_row + 1)}
             self.assertEqual(mid, {"Polymer Materials Corp.", "Quiet Insurance Group"})
             small = top_sheet(p.outputs()[0])
             names = {small.cell(r, 2).value for r in range(2, small.max_row + 1)}
@@ -419,8 +419,8 @@ class TestSizeTiers(PipelineTestCase):
             p.run_enrich()
             p.run_match()
             wb = openpyxl.load_workbook(p.outputs()[0])
-            self.assertIn("Mid ($50m-$200m)", wb.sheetnames)     # Pyro Energy $55m
-            self.assertIn("Large ($200m+)", wb.sheetnames)       # Polymer, Quiet
+            self.assertIn("Mid ($50m-$200m) - top 50", wb.sheetnames)   # Pyro Energy $55m
+            self.assertIn("Large ($200m+) - top 50", wb.sheetnames)     # Polymer, Quiet
         finally:
             p.__exit__()
 
@@ -436,3 +436,23 @@ class TestSizeTierRule(unittest.TestCase):
         self.assertEqual(size_tier(999, cfg), "Mid")
         self.assertEqual(size_tier(1000, cfg), "Large")
         self.assertEqual(size_tier(97929, cfg), "Large")
+
+
+class TestAllCompaniesRanking(PipelineTestCase):
+    def test_every_scored_company_ranked_within_its_tier(self):
+        p = self._prepared()
+        try:
+            p.run_enrich()
+            p.run_match(["--no-full"])
+            ws = openpyxl.load_workbook(p.outputs()[0])["All Companies"]
+            hdr = [c.value for c in ws[1]]
+            rows = [dict(zip(hdr, [c.value for c in r])) for r in ws.iter_rows(min_row=2)]
+            for size in ("Small", "Mid", "Large"):
+                ranks = [r["Rank"] for r in rows if r["Size"] == size and r["Rank"] is not None]
+                self.assertEqual(ranks, list(range(1, len(ranks) + 1)), size)
+                scored = [r for r in rows if r["Size"] == size
+                          and r["Alignment Score (1-9)"] not in (None, "NA")]
+                self.assertTrue(all(r["Rank"] is not None for r in scored), size)
+            self.assertIn("Preliminary Score", hdr)
+        finally:
+            p.__exit__()

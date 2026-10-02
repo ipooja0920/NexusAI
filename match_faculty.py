@@ -52,7 +52,8 @@ from nexus.scoring import (PARTNERSHIP_SYSTEM_PROMPT, normalize, score_alignment
                            score_secondary, write_justification)
 from nexus.settings import Settings
 
-ALIGN_VERSION = "v2"           # bump when the alignment prompt changes
+ALIGN_VERSION = "v3"           # bump when the alignment prompt changes
+PARTNER_VERSION = "p2"         # bump when the partnership prompt changes
 EXCLUDE_DEFAULT = ("Acquired", "Out of Business", "Liquidating")
 NO_TEXT_REASON = "No company description available - not scored"
 REGISTRATION_DEFAULT = "data/input/BDIFR Faculty Registration From-documents.csv"
@@ -203,16 +204,22 @@ def partnership_text(c: dict, text: str) -> str:
     return f"{text}\n\n{track_record_text(c)}".strip() if text else track_record_text(c)
 
 
+def _partner_key(c: dict, text: str) -> str:
+    """Cache key text: the prompt version + what the model was given."""
+    return f"{PARTNER_VERSION}\n{partnership_text(c, text)}"
+
+
 def partnership_scores(indices, companies, texts, cfg, caches, client, memo):
     """Fill `memo` {company index: partnership dict} - AI, cached by
     company + profile text, so it is shared across faculty."""
     model = cfg.openai["scoring_model"]
     todo = []
     ptexts = {gi: partnership_text(companies[gi], texts[gi]) for gi in indices}
+    pkeys = {gi: _partner_key(companies[gi], texts[gi]) for gi in indices}
     for gi in indices:
         if gi in memo:
             continue
-        hit = caches.get_company_scores(companies[gi]["company"], ptexts[gi])
+        hit = caches.get_company_scores(companies[gi]["company"], pkeys[gi])
         if hit is not None:
             memo[gi] = hit["partnership"]
         else:
@@ -232,7 +239,7 @@ def partnership_scores(indices, companies, texts, cfg, caches, client, memo):
             memo[gi] = {"score": score, "reason": reason}
             caches.set_company_scores(companies[gi]["company"], memo[gi],
                                       {"score": None, "reason": "computed at match time"},
-                                      ptexts[gi])
+                                      pkeys[gi])
     caches.company_scores.save()
     return len(indices) - len(todo), len(todo)
 
@@ -321,15 +328,24 @@ def facts_for(gi, c, text, sector, align, partner, funding, academic) -> str:
         f"Industry: {c.get('industry') or 'unknown'}"
         + (f" ({sector} named by the researcher)" if sector else ""),
         f"Company profile: {text or '(no description)'}",
-        f"Alignment score {align['score']}/9: {align['reason']}",
-        (f"Partnership score {partner['score']}/9: {partner['reason']}"
+        f"Alignment score (AI, from the company profile): {align['score']}/9",
+        (f"Partnership likelihood score: {partner['score']}/9"
          if partner["score"] != "NA" else
          "Partnership likelihood: not known (counted as neutral)"),
-        f"University track record: {academic[1]}",
+        track_record_text(c),
         f"Money available: {funding[1]}",
         f"Distance from UConn Storrs: {_fmt(c.get('distance_miles'), ' miles')}",
         f"Revenue: {_fmt(c.get('revenue_usdmm'))} $USDmm; employees: {_fmt(c.get('employees'))}",
     ])
+
+
+def plain_justification(c: dict, align: dict, funding: tuple) -> str:
+    """A justification made only of our data, for when the written one
+    cannot be trusted."""
+    tr = track_record_text(c).replace("\n- ", "; ").replace(":;", ":")
+    return (f"Alignment {align['score']}/9 (AI, from the company profile): {align['reason']} "
+            f"{tr}. Money: {funding[1]} Distance from Storrs: "
+            f"{_fmt(c.get('distance_miles'), ' miles')}.")
 
 
 def justifications(indices, companies, texts, sectors, profile, align, partner,
@@ -341,8 +357,9 @@ def justifications(indices, companies, texts, sectors, profile, align, partner,
                           partner[gi], funding[gi], academic[gi])
         text = write_justification(client, model, profile, companies[gi]["company"],
                                    facts, max_retries=cfg.openai["max_retries"])
-        # if the AI fails, the scores' own reasons still say why
-        return text or f"Alignment {align[gi]['score']}/9: {align[gi]['reason']}"
+        # the AI failed or kept adding things not in our data: write it plainly
+        # from the data instead
+        return text or plain_justification(companies[gi], align[gi], funding[gi])
 
     out = {}
     with ThreadPoolExecutor(max_workers=int(cfg.openai.get("concurrency", 16))) as pool:
@@ -528,8 +545,21 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         passes.append((titles[t], t, run_pass(members[t], companies, texts, align, partner,
                                               cfg, caches, client)))
 
-    # ---------- Justifications for every top-20 company ----------
-    finals = list(dict.fromkeys(gi for _, _, p in passes for gi in p["final"]))
+    # ---------- One tab per size tier, from its widest pass ----------
+    final_n, cutoff = cfg.funnel["final_top_n"], cfg.funnel["secondary_cutoff"]
+    widest = {}
+    for title, t, p in passes:
+        widest[t] = (title, p)             # later passes of a tier are the wider ones
+
+    def tab_title(t, title):
+        if t == "Small":
+            how = ("all companies" if title.startswith("Small - all")
+                   else "sample" if "sample" in title else "pre-filter")
+            return f"Small - top {final_n} ({how})"
+        return f"{titles[t]} - top {final_n}"
+
+    # ---------- Justifications for every listed company ----------
+    finals = list(dict.fromkeys(gi for t in TIERS if t in widest for gi in widest[t][1]["final"]))
     funding, academic = {}, {}
     for _, _, p in passes:
         funding.update(p["funding"])
@@ -565,19 +595,18 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         }
 
     tabs = {}
-    for title, _, p in passes:
+    for t in TIERS:
+        if t not in widest:
+            continue
+        title, p = widest[t]
         rows = []
         for rank, gi in enumerate(p["final"], start=1):
             r = row(gi, rank)
             r["overall_score"] = p["overall"][gi]
             rows.append(r)
-        tabs[title] = rows
+        tabs[tab_title(t, title)] = rows
 
-    # All Companies: every company, from the widest pass of its size tier
-    widest = {}
-    for _, t, p in passes:
-        widest[t] = p          # later passes of a tier are the wider ones
-    final_n, cutoff = cfg.funnel["final_top_n"], cfg.funnel["secondary_cutoff"]
+    # All Companies: every company, ranked within its size tier
     in_a = set(cand_a)
 
     min_align = cfg.funnel.get("min_alignment", 0) or 0
@@ -601,23 +630,37 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
             return "Not scored (no description)"
         return "Filtered out (pre-filter)"
 
+    def tier_order(p):
+        """Ranking of every scored company in a tier: the listed ones by overall
+        score, then the rest of the partnership-scored ones by overall score,
+        then every other company with a 1-9 alignment score by preliminary
+        score. Companies with no score (NA, no description) are not ranked."""
+        listed = list(p["final"])
+        rest_sec = sorted((g for g in p["secondary"] if g not in set(listed)),
+                          key=lambda g: p["overall"][g], reverse=True)
+        seen = set(listed) | set(rest_sec)
+        scored = [g for g in p["candidates"]
+                  if g not in seen and to_num(align.get(g, {}).get("score")) is not None]
+        rest = sorted(scored, key=lambda g: p["prelim"][g], reverse=True)
+        return {g: k for k, g in enumerate(listed + rest_sec + rest, start=1)}
+
     info = {t: {"rank": {gi: k for k, gi in enumerate(p["final"], start=1)},
+                "order": tier_order(p),
                 "sec": set(p["secondary"]), "cand": set(p["candidates"]), "p": p}
-            for t, p in widest.items()}
+            for t, (_, p) in widest.items()}
 
     def sort_key(gi):
         w = info.get(tier[gi])
         order = TIERS.index(tier[gi])
-        if w and gi in w["rank"]:
-            return (order, 0, w["rank"][gi])
-        if w and gi in w["cand"]:
-            return (order, 1, -w["p"]["prelim"][gi])
-        return (order, 2, gi)
+        if w and gi in w["order"]:
+            return (order, 0, w["order"][gi])
+        return (order, 1, gi)
 
     all_rows = []
     for gi in sorted(range(n), key=sort_key):
         w = info.get(tier[gi])
-        r = row(gi, w["rank"].get(gi) if w else None)
+        r = row(gi, w["order"].get(gi) if w else None)
+        r["prelim_score"] = w["p"]["prelim"].get(gi) if w else None
         r["stage"] = stage_of(gi, w)
         r["in_prefilter"] = ("Yes" if gi in in_a else "No") if tier[gi] == "Small" else "All scored"
         r["found_by"] = found_by.get(gi)
@@ -637,7 +680,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
                       + f" (Small = under {_money(tiers_cfg['small_below'])} or revenue "
                       f"unknown; Large = {_money(tiers_cfg['large_from'])} and above)",
         "n_candidates": f"{len(cand_a)} small companies",
-        "n_full": "; ".join(f"{title}: {len(p['candidates']):,}" for title, _, p in passes),
+        "n_full": "; ".join(f"{tab_title(t, widest[t][0])}: {len(widest[t][1]['candidates']):,}"
+                            for t in TIERS if t in widest),
         "secondary_cutoff": f"{cutoff} per tab",
         "weights": cfg.weights,
     }

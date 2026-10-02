@@ -328,7 +328,7 @@ Settings in `config.yaml`.
 | company_profile | **What the matching reads about the company.** For the ~2,000 companies with SBIR, ClinicalTrials.gov or OpenAlex text: an AI-written ~150-word profile from the Capital IQ description + SBIR titles and abstracts (newest first, first 6,000 characters) + trial conditions and treatment types + OpenAlex topics — facts from those sources only, no people's names, no dollar amounts. Everyone else: the Capital IQ description. Embedded for the pre-filter and read by the alignment, partnership and justification prompts. Cached in `data/cache/company_profiles.json` |
 | company_status | Capital IQ "Company Status": Operating, Operating Subsidiary, Acquired, Out of Business, Liquidating, Reorganizing |
 | parent_company | The owner, when the description says "operates as a subsidiary of X" (e.g. Biorez → CONMED Corporation) |
-| organisation_type | `Company`, `Hospital / health system` or `Clinic / care provider` — from the name and the opening of the Capital IQ description; a description saying it develops / manufactures / designs / sells makes it a Company whatever the name. Animal hospitals count as clinics |
+| organisation_type | `Company`, `Contract manufacturer`, `Hospital / health system` or `Clinic / care provider` — from the name and the opening of the Capital IQ description. Contract manufacturer: the description says contract manufacturing / CDMO / outsourced manufacturing / manufacturing services (unless it first says the company develops its own products). A description saying it develops / manufactures / designs / sells makes it a Company whatever the name. Animal hospitals count as clinics |
 | profile_from | `AI: Capital IQ description + sources`, `Capital IQ description`, or `Capital IQ description + research focus` (an AI profile could not be written) |
 
 Final score (`match_faculty.py`, weights unchanged): alignment 30%, distance
@@ -348,25 +348,26 @@ the "anything else" note (industry interests). Emails, IDs, years in post and
 workflow fields are never read. The profile used is in **Run Info**.
 
 Companies are ranked **separately in three size tiers** (revenue, `size_tiers`
-in config.yaml), one tab each, each with its own top 40 (partnership score)
-and top 20:
+in config.yaml). Workbook tabs:
 
 | Tab | Companies | What was AI-scored for alignment |
 |---|---|---|
-| Small - 300 pre-filter | under $100m revenue, or revenue unknown (~21,500) | the 300 small companies closest to the research profile by embedding similarity |
-| Small - all companies | same | every small company with a description (~19,600) — skipped with `--no-full` |
-| Mid ($100m-$1bn) | $100m – $1bn (~190) | all of them |
-| Large ($1bn+) | $1bn and above (~80) | all of them |
+| Small - top 50 (pre-filter) | under $100m revenue, or revenue unknown (~20,000 after leaving out defunct ones) | the 300 closest to the full profile + up to 30 more from each keyword / interest search |
+| Small - top 50 (all companies) | same - replaces the pre-filter tab when the full run is done (no `--no-full`) | every small company with a description (~18,100) |
+| Mid ($100m-$1bn) - top 50 | $100m – $1bn (~190) | all of them |
+| Large ($1bn+) - top 50 | $1bn and above (~80) | all of them |
+| All Companies | every company, ranked within its size tier | |
+| Run Info | the research profile used, models, counts, weights | |
 
-Revenue is the company's own Capital IQ figure (SEC where Capital IQ is
-blank), so a subsidiary listed separately (e.g. a $474m unit of Johnson &
-Johnson) sits in the tier of its own revenue, not its parent's.
+In each tier: alignment ≥ 5/9 → the top 100 by preliminary score get the
+partnership score → the top 50 by overall score are listed (fewer when fewer
+qualify).
 
 | Column | Meaning |
 |---|---|
-| Organisation Type | Company / Hospital / health system / Clinic / care provider — hospitals and clinics are listed, labelled, not removed |
+| Organisation Type | Company / Contract manufacturer / Hospital / health system / Clinic / care provider — all listed, labelled, not removed |
 | Status, Parent Company | Capital IQ status; the owner of a subsidiary — the partner to approach |
-| Justification | 2–3 sentences: which of the researcher's keywords / problems / methods the company's work touches, then distance, size, money and university record as far as the figures support |
+| Justification | 2–3 sentences: which of the researcher's keywords / problems / methods the company's work touches, then distance, size, money and university record. Written ONLY from our data (see "No outside knowledge" below) |
 | Size | Small / Mid / Large (above) |
 | Overall Score | Final weighted score (above) |
 | Sector Match | `Primary sector` / `Secondary sector`: the company's Capital IQ industry group is the one the researcher named. Capital IQ here holds only two industry groups (Health Care Equipment and Services; Pharmaceuticals, Biotechnology and Life Sciences) |
@@ -391,8 +392,24 @@ Johnson) sits in the tier of its own revenue, not its parent's.
   (`prefilter.extra_per_search`) - about 450 in all. `Found By` in All
   Companies says which search brought a company in.
 
-**All Companies** lists every company, grouped Small / Mid / Large, with its
-stage within its tier, `In Pre-filter` (Yes/No for small companies, "All
+**No outside knowledge.** Every AI step is told to use only the text it is
+given and nothing it may "know" about a company:
+- company profile: only the Capital IQ description and SBIR / trial / OpenAlex text
+- alignment: only the company's name, industry and profile
+- partnership: only the profile and the university track record from our data
+- justification: only the researcher profile and a list of facts from our data
+  (profile, organisation type, status / parent, sector, scores, university
+  record, money, distance, size). Each justification is then **checked
+  automatically**: any figure or university name not in those facts sends it
+  back once; if it still adds one, a plain justification built from the data
+  is used instead.
+
+**All Companies** lists every company, grouped Small / Mid / Large. `Rank` is
+the position within the tier: the listed ones by overall score, then the rest
+of the partnership-scored ones by overall score, then every other company with
+an alignment score by `Preliminary Score` (distance, size and alignment).
+Companies without a score are not ranked. Each row shows its stage within the
+tier, `In Pre-filter` (Yes/No for small companies, "All
 scored" for mid and large) and scores. Alignment scores are cached
 (`data/cache/alignment_scores.json`), so an interrupted run resumes and the
 second pass reuses the first pass's 300 scores. Partnership scores are cached

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import threading
 import time
 from typing import List, Optional, Tuple
@@ -34,12 +35,18 @@ ALIGNMENT_SYSTEM_PROMPT = (
     "- The nature of the research (applied / translational / clinical work fits "
     "companies with products in that area) and the industry sectors and "
     "interests the researcher names\n\n"
-    "Focus on specific alignment with the research described. A company "
-    "description is provided when available; ground your judgment in it.\n\n"
+    "Focus on specific alignment with the research described.\n\n"
+    "GROUNDING RULES - follow them exactly:\n"
+    "- Use ONLY the company information in this message (name, industry, "
+    "description). Do not use outside knowledge about the company, its products, "
+    "programs or partnerships - even for a well-known company, judge only from "
+    "the text given.\n"
+    "- Your reason must refer to what the description actually says.\n"
+    "- If the description is missing or says too little to judge, the score is NA.\n\n"
     "Return ONLY valid JSON with fields: "
     '{"company": <exact name>, "score": 1-9 integer OR "NA", "reason": string <= 40 words}.\n'
-    "RULE: If there is no reliable information about the company's alignment, "
-    'set score to "NA" and reason to "No alignment information available".'
+    "RULE: If there is no reliable information about the company's alignment in the "
+    'text given, set score to "NA" and reason to "No alignment information available".'
 )
 
 PARTNERSHIP_SYSTEM_PROMPT = (
@@ -61,11 +68,14 @@ PARTNERSHIP_SYSTEM_PROMPT = (
     "- The university track record given (past and current university partners on "
     "federal SBIR/STTR awards and clinical trials, university research it funded "
     "or co-wrote)\n\n"
-    "Judge from the company description and track record given, plus anything you "
-    "reliably know. A small or private company with little public information is "
-    "judged on what is given (an R&D-driven device or biotech startup is more likely "
-    "to partner than a distributor or a single clinic) - do not answer NA just "
-    "because the company is obscure.\n\n"
+    "GROUNDING RULES - follow them exactly:\n"
+    "- Use ONLY the company description and the university track record given in "
+    "this message. Do not use outside knowledge (programs, collaborations, "
+    "incubators or reputations you have heard of) - even for a well-known company.\n"
+    "- Your reason must refer to what the description or track record says.\n"
+    "- A small or private company is judged on what is given (an R&D-driven device or "
+    "biotech developer is more likely to partner than a distributor or a single "
+    "clinic) - do not answer NA just because the company is obscure.\n\n"
     "Return ONLY valid JSON with fields: "
     '{"company": <exact name>, "score": 1-9 integer OR "NA", "reason": string <= 40 words}.\n'
     "RULE: Only if no company description is given and you know nothing about the "
@@ -201,30 +211,85 @@ def score_secondary(client, model: str, company: str, system_prompt: str,
 
 JUSTIFICATION_SYSTEM_PROMPT = (
     "You write the justification column of a faculty-to-company match list for a "
-    "university research office. Given a researcher's profile, a company's profile "
-    "and the scores already computed, explain in 2-3 sentences (at most 80 words) "
-    "why this company is a match for this researcher. Name the specific overlap: "
-    "which of the researcher's keywords, problems or methods the company's products, "
-    "technologies or conditions touch. Then mention the practical factors that "
-    "help or hurt (distance, company size, money available, track record with "
-    "universities) only as far as the figures given support them. Use only the "
-    "information given; do not invent facts and do not name any people. If the "
-    "overlap is weak, say so plainly.\n\n"
+    "university research office. Given a researcher's profile and a list of FACTS "
+    "about a company, explain in 2-3 sentences (at most 80 words) why this company "
+    "is a match for this researcher. Name the specific overlap: which of the "
+    "researcher's keywords, problems or methods the company's products, technologies "
+    "or conditions (as stated in the company profile) touch. Then mention the "
+    "practical factors that help or hurt (distance, size, money available, track "
+    "record with universities, organisation type, parent company).\n\n"
+    "GROUNDING RULES - follow them exactly:\n"
+    "- Every statement must come from the researcher profile or the FACTS given. "
+    "Do not use outside knowledge about the company.\n"
+    "- Do not mention any university, program, partnership, product, number, year or "
+    "amount that is not written in the FACTS.\n"
+    "- If the FACTS say no university track record or no funding record, say that - "
+    "do not guess.\n"
+    "- Do not name any people. If the overlap is weak, say so plainly.\n\n"
     'Return ONLY valid JSON: {"justification": string}.'
 )
+
+_NUM = re.compile(r"\d[\d,]*(?:\.\d+)?")
+_UNI = re.compile(r"\b(University of [A-Z][\w&.' -]*?|[A-Z][\w&.'-]*(?: [A-Z][\w&.'-]*)* "
+                  r"(?:University|College|Institute|Hospital))\b")
+
+
+def _numbers(text: str) -> set:
+    out = set()
+    for m in _NUM.findall(text or ""):
+        try:
+            v = float(m.replace(",", ""))
+        except ValueError:
+            continue
+        out.add(round(v, 1))
+        out.add(round(v))
+    return out
+
+
+def ungrounded(text: str, source: str) -> list:
+    """Figures and university names in `text` that are not in `source` -
+    the automatic check that a justification invents nothing. Scores out of
+    9 (1-9) are allowed: they are what the scale is."""
+    bad = []
+    have = _numbers(source)
+    for m in _NUM.findall(text or ""):
+        v = float(m.replace(",", ""))
+        if v in have or round(v, 1) in have or round(v) in have or (v.is_integer() and 1 <= v <= 9):
+            continue
+        bad.append(m)
+    low = (source or "").lower()
+    for m in _UNI.findall(text or ""):
+        if m.lower().strip() not in low:
+            bad.append(m)
+    return bad
 
 
 def write_justification(client, model: str, research_profile: str, company: str,
                         facts: str, max_retries: int = 3) -> Optional[str]:
-    """2-3 sentences on why this company matches this researcher."""
-    user_prompt = (f"Researcher:\n{research_profile}\n\nCompany: {company}\n"
-                   f"{facts}\n\nRespond with JSON only.")
+    """2-3 sentences on why this company matches this researcher, built only
+    from the facts given. Each answer is checked: a figure or a university
+    name that is not in the researcher profile or the facts sends it back
+    once with the problem named; if it still invents, None is returned and
+    the caller writes a plain justification from the data instead."""
+    base = (f"Researcher:\n{research_profile}\n\nCompany: {company}\nFACTS:\n"
+            f"{facts}\n\nRespond with JSON only.")
+    source = f"{research_profile}\n{company}\n{facts}"
+    user_prompt, rewrites = base, 0
     for attempt in range(1, max_retries + 1):
         try:
             raw = _chat(client, model, JUSTIFICATION_SYSTEM_PROMPT, user_prompt)
             text = str(json.loads(raw).get("justification", "")).strip()
             if text:
-                return text
+                bad = ungrounded(text, source)
+                if not bad:
+                    return text
+                if rewrites >= 1:
+                    return None
+                rewrites += 1
+                user_prompt = (base + "\n\nYour previous answer mentioned things that are "
+                               f"not in the FACTS: {', '.join(bad)}. Rewrite it using only "
+                               "the FACTS.")
+                continue
         except Exception:
             pass
         if attempt < max_retries:

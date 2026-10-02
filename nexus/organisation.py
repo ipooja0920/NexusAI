@@ -5,7 +5,8 @@ companies with hospitals, physician practices, nursing homes and clinics.
 They can be useful clinical collaborators but are not industry sponsors, so
 the output LABELS them (they are not removed):
 
-  organisation_type   Company / Hospital / health system / Clinic / care provider
+  organisation_type   Company / Contract manufacturer / Hospital / health system /
+                      Clinic / care provider
                       - from the company name and the opening of its Capital
                       IQ description (where Capital IQ says what it IS).
                       A description that says it develops, manufactures,
@@ -18,6 +19,7 @@ from __future__ import annotations
 import re
 
 COMPANY = "Company"
+CONTRACT = "Contract manufacturer"
 HOSPITAL = "Hospital / health system"
 CLINIC = "Clinic / care provider"
 
@@ -49,6 +51,18 @@ _CLIN_DESC = re.compile(
     r"assisted living|medical offices?|health practitioner)\b"
     r"|\bprovider of (?:\w+[ ,-]+){0,4}?(managed care|physical therapy|health ?care|medical|"
     r"nursing|home health|rehabilitation|dental|behavioral health|mental health)\b)", re.I)
+# makes things FOR other companies (contract manufacturer, CDMO, outsourced
+# manufacturing) - a supplier, not a developer with its own research agenda
+_CONTRACT = re.compile(
+    r"contract manufactur|\bCDMO\b|\bCMO services\b|contract research and manufacturing|"
+    r"contract (?:development(?: and|,)? |dosage form development and |process research and )"
+    r"manufactur|outsourc\w* (?:\w+ ){0,3}manufactur|"
+    r"end-to-end (?:\w+ ){0,3}(?:manufacturing|solutions from prototyping)|"
+    r"(?:provides?|offering|offers) (?:\w+[ ,]+){0,5}manufacturing (?:and \w+ )?services|"
+    r"private[- ]label manufactur|manufactures? (?:\w+ ){0,3}solutions for medical devices",
+    re.I)
+# a developer of its own products that ALSO sells manufacturing services
+_DEVELOPER = re.compile(r"\b(develops?|developing|discovers|commercializ\w*)\b", re.I)
 _VET = re.compile(r"\b(animal|veterinar\w*|pet care)\b", re.I)
 _PARENT = re.compile(
     r"\boperates as (?:a |an )?(?:wholly[- ]owned )?subsidiary of\s+([^.;]+?)\s*(?:\.(?:\s|$)|;|$)",
@@ -65,6 +79,11 @@ def _opening(description) -> str:
 def organisation_type(name, description) -> str:
     name = "" if name is None else str(name)
     opening = _opening(description)
+    cm = _CONTRACT.search(opening)
+    if cm:
+        dev = _DEVELOPER.search(opening)
+        if not (dev and dev.start() < cm.start()):
+            return CONTRACT
     if _MAKER.search(opening):
         return COMPANY
     # an animal hospital is a veterinary clinic, not a health system

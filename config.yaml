@@ -86,8 +86,8 @@ size_tiers:
 
 # --------- Scoring funnel --------------------------------------------
 funnel:
-  secondary_cutoff: 40    # top-N companies that get partnership/funding scoring
-  final_top_n: 20         # companies written to the output workbook
+  secondary_cutoff: 100   # top-N per tab that get the partnership score
+  final_top_n: 50         # companies listed in each size tab
   # only companies with an AI alignment score of at least this reach the
   # partnership step and a top tab (a tab may then list fewer than 20)
   min_alignment: 5

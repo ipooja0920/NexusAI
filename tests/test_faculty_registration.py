@@ -73,9 +73,10 @@ class TestRunByRow(unittest.TestCase):
             self.assertEqual(len(out), 1)
             self.assertIn("Julie Burland", out[0].name)
             wb = openpyxl.load_workbook(out[0])
-            self.assertEqual(wb.sheetnames[:3], ["Small - 3 pre-filter",
-                                                  "Small - all companies", "Mid ($100m-$1bn)"])
-            for name in wb.sheetnames[:3]:
+            # one tab per size tier: Small from its widest pass (all companies)
+            self.assertEqual(wb.sheetnames[:2], ["Small - top 50 (all companies)",
+                                                  "Mid ($100m-$1bn) - top 50"])
+            for name in wb.sheetnames[:2]:
                 ws = wb[name]
                 hdr = [c.value for c in ws[1]]
                 j = hdr.index("Justification") + 1

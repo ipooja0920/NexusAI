@@ -102,7 +102,9 @@ class FakeOpenAI:
             if "justification" in system:
                 FakeOpenAI.call_log.append("justification")
                 return _ChatResp(json.dumps({"justification": f"Mock justification for {company}."}))
-            if "partner" in system:
+            if "how well companies align" in system:
+                kind = "alignment"
+            elif "partner" in system:
                 kind = "partnership"
             elif "budget" in system:
                 kind = "funding"

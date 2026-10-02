@@ -246,6 +246,7 @@ ALL_COLUMNS = [
     ("Partnership Reason", "partnership_reason", 45),
     ("Funding Score (0-1)", "funding_score", 10),
     ("Funding Reason", "funding_reason", 40),
+    ("Preliminary Score", "prelim_score", 11),
     ("Overall Score", "overall_score", 10),
     ("Status", "company_status", 14),
     ("Parent Company", "parent_company", 24),
@@ -255,7 +256,7 @@ ALL_COLUMNS = [
 RESULT_HEADERS = [h for h, _, _ in RESULT_COLUMNS]
 ALL_HEADERS = [h for h, _, _ in ALL_COLUMNS]
 
-_ROUND4 = {"overall_score", "distance_score", "employee_score", "revenue_score"}
+_ROUND4 = {"overall_score", "prelim_score", "distance_score", "employee_score", "revenue_score"}
 
 
 def unique_path(path: Path) -> Path:
