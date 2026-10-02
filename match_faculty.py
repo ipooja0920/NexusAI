@@ -130,7 +130,8 @@ def score_alignments(indices, companies, texts, profile, cfg, caches, client, al
                                industry=c.get("industry"))
 
     done = 0
-    with ThreadPoolExecutor(max_workers=int(cfg.openai.get("concurrency", 16))) as pool:
+    pool = ThreadPoolExecutor(max_workers=int(cfg.openai.get("concurrency", 16)))
+    try:
         futures = {pool.submit(one, gi): (gi, key) for gi, key in todo}
         for fut in as_completed(futures):
             gi, key = futures[fut]
@@ -141,8 +142,16 @@ def score_alignments(indices, companies, texts, profile, cfg, caches, client, al
             done += 1
             if done % step == 0 or done == n:
                 print(f"  [alignment] {done}/{n} scored ({time.time()-t0:.0f}s)")
-            if done % 2000 == 0:
+            if done % 500 == 0:
                 caches.alignment.save()
+    except KeyboardInterrupt:
+        # Ctrl-C: drop the queued calls instead of waiting for all of them,
+        # and keep every score already made for the re-run
+        print("\n  [alignment] stopping - saving the scores made so far ...")
+        pool.shutdown(wait=False, cancel_futures=True)
+        caches.alignment.save()
+        raise
+    pool.shutdown(wait=True)
     caches.alignment.save()
     failed = sum(1 for gi, _ in todo if align[gi]["reason"] == scoring.STD_NA_REASON)
     if failed:
