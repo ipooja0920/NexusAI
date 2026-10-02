@@ -348,20 +348,23 @@ the "anything else" note (industry interests). Emails, IDs, years in post and
 workflow fields are never read. The profile used is in **Run Info**.
 
 Companies are ranked **separately in three size tiers** (revenue, `size_tiers`
-in config.yaml). Workbook tabs:
+in config.yaml); hospitals and clinics are taken out of those tabs and ranked on
+one sheet of their own. Workbook tabs:
 
-| Tab | Companies | What was AI-scored for alignment |
-|---|---|---|
-| Small - top 50 (pre-filter) | under $100m revenue, or revenue unknown (~20,000 after leaving out defunct ones) | the 300 closest to the full profile + up to 30 more from each keyword / interest search |
-| Small - top 50 (all companies) | same - replaces the pre-filter tab when the full run is done (no `--no-full`) | every small company with a description (~18,100) |
-| Mid ($100m-$1bn) - top 50 | $100m – $1bn (~190) | all of them |
-| Large ($1bn+) - top 50 | $1bn and above (~80) | all of them |
-| All Companies | every company, ranked within its size tier | |
-| Run Info | the research profile used, models, counts, weights | |
+| Tab | What it lists |
+|---|---|
+| Small - top 50 (pre-filter) | companies under $100m revenue or revenue unknown. AI-scored: the 300 closest to the full research profile + up to 30 more from each keyword / interest search (~450). `--full` scores every small company instead (hours) and the tab is then "(all companies)" |
+| Mid ($100m-$1bn) - top 50 | companies $100m – $1bn, all AI-scored |
+| Large ($1bn+) - top 50 | companies $1bn and above, all AI-scored |
+| Hospitals & Clinics - top 50 | hospitals, health systems, clinics and practices of every size (Size column), from the same scoring |
+| All Companies | every company, ranked within its size tier |
+| Run Info | the research profile used, models, counts, weights |
 
-In each tier: alignment ≥ 5/9 → the top 100 by preliminary score get the
-partnership score → the top 50 by overall score are listed (fewer when fewer
-qualify).
+In each tier: companies and care providers each send their top 100 (by
+preliminary score: distance, size, alignment) to the partnership step; the top
+50 companies by overall score fill the tier tab, and the providers' best go to
+the Hospitals & Clinics sheet (top 50 across all sizes). A minimum alignment
+score can be set (`funnel.min_alignment`, off by default).
 
 | Column | Meaning |
 |---|---|
@@ -380,8 +383,8 @@ qualify).
 
 - Companies Capital IQ marks **Acquired, Out of Business or Liquidating** are left
   out of the tabs (1,507); All Companies shows them as "Left out (…)".
-- Only companies with **alignment 5/9 or more** reach the partnership step and
-  a tab, so a tab may list fewer than 20 rather than pad with weak matches.
+- `funnel.min_alignment` (off by default) can require an alignment score
+  before a company reaches the partnership step and a tab.
 - A partnership answer of **NA** ("not known") counts as **neutral (0.5)** after
   the 1–9 scores are scaled — not as the lowest score. The partnership prompt
   is given the company's university record (SBIR and trial university

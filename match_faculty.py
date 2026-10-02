@@ -248,6 +248,15 @@ def partnership_scores(indices, companies, texts, cfg, caches, client, memo):
 # One pass: preliminary score -> top 40 partnership -> final top 20
 # ----------------------------------------------------------------------
 
+PROVIDERS = ("Hospital / health system", "Clinic / care provider")
+PROVIDER_TAB = "Hospitals & Clinics"
+
+
+def is_provider(c: dict) -> bool:
+    """Hospitals, health systems, clinics, practices - listed on their own sheet."""
+    return (c.get("organisation_type") or "") in PROVIDERS
+
+
 def run_pass(candidate_idx, companies, texts, align, partner, cfg, caches, client):
     w = cfg.weights
     n = len(companies)
@@ -265,16 +274,18 @@ def run_pass(candidate_idx, companies, texts, align, partner, cfg, caches, clien
                       w["revenue"] * c["revenue_score"] +
                       w["alignment"] * align_norm[gi]) / prelim_weight
 
-    # Only companies the AI judged at least `min_alignment` go on: in a tier
-    # where every company is close and well funded, distance and money would
-    # otherwise carry a 3/9 match into the top 20. A tab may list fewer than
-    # 20 - that is the honest answer.
+    # optional floor on the AI alignment score (funnel.min_alignment, 0 = off)
     min_align = cfg.funnel.get("min_alignment", 0) or 0
     eligible = [gi for gi in candidate_idx
                 if align_nums[gi] is not None and align_nums[gi] >= min_align]
     cutoff = cfg.funnel["secondary_cutoff"]
     ranked = sorted(eligible, key=lambda i: prelim[i], reverse=True)
-    top_secondary = ranked[:cutoff]
+    # companies and care providers (hospitals, clinics) go forward separately,
+    # so the providers - listed on their own sheet - never take the places of
+    # companies, and vice versa
+    comp = [gi for gi in ranked if not is_provider(companies[gi])][:cutoff]
+    prov = [gi for gi in ranked if is_provider(companies[gi])][:cutoff]
+    top_secondary = sorted(comp + prov, key=lambda i: prelim[i], reverse=True)
     cached, new = partnership_scores(top_secondary, companies, texts, cfg, caches,
                                      client, partner)
     print(f"  [partnership] top {len(top_secondary)}: {cached} from cache, {new} new")
@@ -301,10 +312,14 @@ def run_pass(candidate_idx, companies, texts, align, partner, cfg, caches, clien
                        w["alignment"] * align_norm[gi] +
                        w["partnership"] * p_adj[gi] +
                        w["funding"] * funding[gi][0])
-    final = sorted(overall, key=overall.get, reverse=True)[:cfg.funnel["final_top_n"]]
+    final_n = cfg.funnel["final_top_n"]
+    final_comp = sorted(comp, key=overall.get, reverse=True)[:final_n]
+    final_prov = sorted(prov, key=overall.get, reverse=True)[:final_n]
+    final = sorted(final_comp + final_prov, key=overall.get, reverse=True)
     return {"candidates": list(candidate_idx), "prelim": prelim, "secondary": top_secondary,
-            "eligible": set(eligible),
-            "funding": funding, "academic": academic, "overall": overall, "final": final}
+            "eligible": set(eligible), "funding": funding, "academic": academic,
+            "overall": overall, "final": final,
+            "final_companies": final_comp, "final_providers": final_prov}
 
 
 # ----------------------------------------------------------------------
@@ -560,6 +575,11 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
 
     # ---------- Justifications for every listed company ----------
     finals = list(dict.fromkeys(gi for t in TIERS if t in widest for gi in widest[t][1]["final"]))
+    # providers beyond the combined sheet's top N are not listed - no justification
+    prov_all = sorted(((widest[t][1]["overall"][gi], gi) for t in TIERS if t in widest
+                       for gi in widest[t][1]["final_providers"]), reverse=True)
+    unlisted = {gi for _, gi in prov_all[final_n:]}
+    finals = [gi for gi in finals if gi not in unlisted]
     funding, academic = {}, {}
     for _, _, p in passes:
         funding.update(p["funding"])
@@ -600,11 +620,22 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
             continue
         title, p = widest[t]
         rows = []
-        for rank, gi in enumerate(p["final"], start=1):
+        for rank, gi in enumerate(p["final_companies"], start=1):
             r = row(gi, rank)
             r["overall_score"] = p["overall"][gi]
             rows.append(r)
         tabs[tab_title(t, title)] = rows
+    # hospitals and clinics of every size on one sheet, best first
+    prov = sorted(((p["overall"][gi], gi) for t in TIERS if t in widest
+                   for p in [widest[t][1]] for gi in p["final_providers"]), reverse=True)
+    rows = []
+    for rank, (score, gi) in enumerate(prov[:final_n], start=1):
+        r = row(gi, rank)
+        r["overall_score"] = score
+        rows.append(r)
+    tabs[f"{PROVIDER_TAB} - top {final_n}"] = rows
+    listed = {gi for t in TIERS if t in widest for gi in widest[t][1]["final_companies"]}
+    listed |= {gi for _, gi in prov[:final_n]}
 
     # All Companies: every company, ranked within its size tier
     in_a = set(cand_a)
@@ -616,8 +647,9 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
             return f"Left out ({companies[gi].get('company_status')})"
         if w is None:
             return "Not scored"
-        if gi in w["rank"]:
-            return f"Top {final_n}"
+        if gi in listed:
+            return (f"Listed ({PROVIDER_TAB})" if is_provider(companies[gi])
+                    else f"Listed (top {final_n})")
         if gi in w["sec"]:
             return f"Secondary scored (top {cutoff})"
         if gi in w["cand"]:
@@ -733,8 +765,11 @@ def main() -> int:
                                       "then the Faculty Database).")
     ap.add_argument("--row", type=int, help="Run the faculty on this row of the "
                                            "registration form (header = row 1).")
+    ap.add_argument("--full", action="store_true",
+                    help="Small companies: AI-score EVERY one instead of the 300 most "
+                         "similar (hours; off by default).")
     ap.add_argument("--no-full", action="store_true",
-                    help="Only the 300 pre-filter pass (skip scoring every company).")
+                    help="Only the pre-filter (the default, kept for old commands).")
     ap.add_argument("--sample", type=int, default=0,
                     help="Second pass on the pre-filter + N more companies only, and "
                          "print what the full pass would take.")
@@ -758,7 +793,7 @@ def main() -> int:
     companies_df = read_enriched(cfg.companies_enriched)
     companies = companies_df.where(companies_df.notna(), None).to_dict("records")
     print(f"Company datasource: {len(companies)} companies (enriched)")
-    full = not args.no_full and cfg.prefilter.get("full_run", True)
+    full = (args.full or bool(cfg.prefilter.get("full_run", False))) and not args.no_full
 
     if args.dry_run:
         tiers_cfg = cfg.raw.get("size_tiers") or {"small_below": 100, "large_from": 1000}

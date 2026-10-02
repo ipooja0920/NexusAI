@@ -73,9 +73,10 @@ prefilter:
   # are searched on their own and ADD up to this many companies each on top
   # of the 300 (the 300 from the full profile are never reduced)
   extra_per_search: 30
-  # also run a second pass WITHOUT the pre-filter (AI-scores every company
-  # with a description) and give it its own output tab; --no-full skips it
-  full_run: true
+  # true = small companies are AI-scored ALL, not just the most similar
+  # (hours of AI calls). Default off: the pre-filter keeps every candidate
+  # relevant. One run can opt in with --full.
+  full_run: false
 
 # --------- Company size tiers (revenue, $USDmm) ----------------------
 # Each faculty's output ranks companies separately per tier, one tab each.
@@ -88,9 +89,9 @@ size_tiers:
 funnel:
   secondary_cutoff: 100   # top-N per tab that get the partnership score
   final_top_n: 50         # companies listed in each size tab
-  # only companies with an AI alignment score of at least this reach the
-  # partnership step and a top tab (a tab may then list fewer than 20)
-  min_alignment: 5
+  # optional floor: only companies with an AI alignment score of at least
+  # this reach the partnership step and a tab (0 = off, the default)
+  min_alignment: 0
   # an NA partnership answer ("not known") counts as this, after the 1-9
   # scores are scaled to 0-1 - neutral, not the lowest score
   partnership_missing: 0.5

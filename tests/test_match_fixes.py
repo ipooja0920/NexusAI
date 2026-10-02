@@ -39,6 +39,11 @@ class TestOrganisation(unittest.TestCase):
             "Orthopedic Health Services Inc", "Operates As A Provider Of Managed Care, "
             "Physical Therapy And Other Fitness And Health Services (100%)"), CLINIC)
 
+    def test_a_dental_supply_distributor_is_a_company(self):
+        self.assertEqual(organisation_type("Dental Supplies Co.",
+                                           "Distributor of dental equipment and consumables."),
+                         COMPANY)
+
     def test_animal_hospital_is_a_clinic(self):
         self.assertEqual(organisation_type("Floyd Harbor Animal Hospital",
                                            "Floyd Harbor Animal Hospital is a health care "
@@ -132,6 +137,7 @@ class TestRunPass(unittest.TestCase):
         self.caches = Caches(Path(tempfile.mkdtemp()))
 
     def test_na_partnership_is_neutral_and_min_alignment(self):
+        self.cfg.raw["funnel"]["min_alignment"] = 5
         comps = [_company("A"), _company("B"), _company("C"), _company("Low", dist=1.0)]
         align = {0: {"score": "8", "reason": ""}, 1: {"score": "8", "reason": ""},
                  2: {"score": "8", "reason": ""}, 3: {"score": "3", "reason": ""}}
@@ -190,7 +196,8 @@ class TestPipeline(unittest.TestCase):
 
     def test_weak_matches_never_fill_a_tab(self):
         faculty = [("Prof Dental", "X", "Y", "orthodontic enamel bonding", "", "", "N")]
-        p = TempProject(faculty=faculty)
+        # the floor is optional (off by default) - switched on here
+        p = TempProject(faculty=faculty, config_overrides={"funnel": {"min_alignment": 5}})
         p.__enter__()
         try:
             p.seed_geocodes()

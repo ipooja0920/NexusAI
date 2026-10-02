@@ -93,7 +93,8 @@ class TestFullRun(PipelineTestCase):
             ws = openpyxl.load_workbook(p.outputs()[0])["All Companies"]
             self.assertEqual(ws.max_row - 1, 8)          # all 8 fixtures present
             stages = {ws.cell(r, 1).value for r in range(2, ws.max_row + 1)}
-            self.assertTrue(stages <= {"Top 50", "Secondary scored (top 100)",
+            self.assertTrue(stages <= {"Listed (top 50)", "Listed (Hospitals & Clinics)",
+                                       "Secondary scored (top 100)",
                                        "Alignment scored", "Filtered out (pre-filter)",
                                        "Not scored (no description)", "Alignment below 5"})
         finally:
@@ -285,12 +286,11 @@ class TestPrefilterActivation(PipelineTestCase):
             FakeOpenAI.reset()
             p.run_match()
             counts = FakeOpenAI.counts()
-            # pass 1 scores the 3 candidates; pass 2 the other 4 with a
-            # description - the 3 come from the cache, not a second call
-            self.assertEqual(counts.get("alignment", 0), 7)
+            # the 3 small candidates + the 2 mid-size companies; no full run
+            self.assertEqual(counts.get("alignment", 0), 5)
             self.assertEqual(counts.get("embedding", 0), 1, "faculty profile embedded once")
             wb = openpyxl.load_workbook(p.outputs()[0])
-            self.assertIn("Small - top 50 (all companies)", wb.sheetnames)
+            self.assertIn("Small - top 50 (pre-filter)", wb.sheetnames)
             ws = wb["All Companies"]
             inpf = column(ws, "In Pre-filter")
             self.assertEqual([ws.cell(r, inpf).value for r in range(2, ws.max_row + 1)].count("Yes"), 3)
@@ -398,6 +398,7 @@ class TestSizeTiers(PipelineTestCase):
             wb = openpyxl.load_workbook(p.outputs()[0])
             self.assertEqual(wb.sheetnames, ["Small - top 50 (all companies)",
                                              "Mid ($100m-$1bn) - top 50",
+                                             "Hospitals & Clinics - top 50",
                                              "All Companies", "Run Info"])
             m = wb["Mid ($100m-$1bn) - top 50"]
             mid = {m.cell(r, 2).value for r in range(2, m.max_row + 1)}
@@ -454,5 +455,49 @@ class TestAllCompaniesRanking(PipelineTestCase):
                           and r["Alignment Score (1-9)"] not in (None, "NA")]
                 self.assertTrue(all(r["Rank"] is not None for r in scored), size)
             self.assertIn("Preliminary Score", hdr)
+        finally:
+            p.__exit__()
+
+
+class TestFullFlagAndProviders(PipelineTestCase):
+    def test_full_is_opt_in(self):
+        p = self._prepared(config_overrides={"prefilter": {"top_n_candidates": 3}})
+        try:
+            p.run_enrich()
+            FakeOpenAI.reset()
+            p.run_match(["--full"])
+            # 3 candidates, then every other small company with a description
+            # (the 3 from the cache), + 2 mid-size
+            self.assertEqual(FakeOpenAI.counts().get("alignment", 0), 7)
+            self.assertIn("Small - top 50 (all companies)",
+                          openpyxl.load_workbook(p.outputs()[0]).sheetnames)
+        finally:
+            p.__exit__()
+
+    def test_hospitals_and_clinics_on_their_own_sheet(self):
+        import pandas as pd
+        p = self._prepared()
+        try:
+            p.run_enrich()
+            cfg = p.settings()
+            df = pd.read_excel(cfg.companies_enriched)
+            df["organisation_type"] = df["organisation_type"].astype(object)
+            df.loc[df.company == "Catalyst Works LLC", "organisation_type"] = "Hospital / health system"
+            df.loc[df.company == "Quiet Insurance Group", "organisation_type"] = "Clinic / care provider"
+            with pd.ExcelWriter(cfg.companies_enriched) as w:
+                df.to_excel(w, index=False, sheet_name="Companies")
+            p.run_match()
+            wb = openpyxl.load_workbook(p.outputs()[0])
+            prov = wb["Hospitals & Clinics - top 50"]
+            names = {prov.cell(r, 2).value for r in range(2, prov.max_row + 1)}
+            self.assertEqual(names, {"Catalyst Works LLC", "Quiet Insurance Group"})
+            for ws in wb.worksheets:
+                if ws.title.startswith(("Small", "Mid", "Large")):
+                    listed = {ws.cell(r, 2).value for r in range(2, ws.max_row + 1)}
+                    self.assertFalse(listed & names, ws.title)
+            # sizes shown on the providers sheet
+            col = [c.value for c in prov[1]].index("Size") + 1
+            self.assertEqual({prov.cell(r, col).value for r in range(2, prov.max_row + 1)},
+                             {"Small", "Mid"})
         finally:
             p.__exit__()

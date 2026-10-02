@@ -35,6 +35,7 @@ _CLIN_NAME = re.compile(
 _MAKER = re.compile(
     r"\b(develops?|developing|manufactures?|manufacturing|designs?|produces?|engineers|"
     r"discovers|commercializes|markets|sells|distributes|supplies|"
+    r"developer|manufacturer|distributor|supplier|maker|wholesaler|"
     r"offers (?:a |an )?(?:software|platform|products?|devices?|systems?))\b", re.I)
 _HOSP_DESC = re.compile(
     r"\b(operates|owns and operates|owns|operates as|is|runs)\s+(?:a |an |as a |as an )?"
