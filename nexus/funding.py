@@ -204,6 +204,17 @@ def company_funding_score(company: dict, cfg: dict) -> tuple:
     oa_recent = (_yes(company.get("oa_funded_university"))
                  and last_funded is not None and last_funded >= cfg["oa_funded_from"])
     revenue = _num_or_none(company.get("revenue_usdmm"))
+    # an R&D figure far too small for the company's revenue is a different
+    # SEC item, not its R&D budget - leave it out rather than score it
+    rd_note = None
+    sanity = cfg.get("rd_sanity") or {}
+    rd = signals["rd_expense"][0]
+    if (rd is not None and revenue and sanity
+            and revenue >= sanity.get("revenue_min", float("inf"))
+            and rd < revenue * sanity.get("min_share", 0)):
+        rd_note = (f"SEC R&D figure (${rd:,.0f}m) ignored - too small for "
+                   f"${revenue:,.0f}m revenue")
+        signals["rd_expense"] = (None, None)
     small = revenue is None or revenue < cfg["formd_raised_revenue_max"]
     raised_small = _yes(company.get("formd_raised")) and small
 
@@ -217,10 +228,13 @@ def company_funding_score(company: dict, cfg: dict) -> tuple:
     bits = [labels[k].format(v) for k, (v, _) in signals.items() if v is not None]
     if oa_recent:
         bits.append(f"funded university research in {last_funded}")
-    if not bits:
+    if rd_note:
+        bits.append(rd_note)
+    if not [b for b in bits if b != rd_note]:
+        tail = f" ({rd_note})" if rd_note else ""
         if raised_small:
-            return score, "Raised private money before (Form D), nothing recent."
-        return score, "No funding record found - neutral."
+            return score, f"Raised private money before (Form D), nothing recent.{tail}"
+        return score, f"No funding record found - neutral.{tail}"
     return score, "; ".join(bits) + "."
 
 

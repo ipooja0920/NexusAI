@@ -17,6 +17,7 @@ DEFAULT_FUNDING = {
     "oa_funded_from": 2025,
     "recency": {"fresh_year": 2025, "fresh": 1.0, "recent": 0.6, "stale": 0.25},
     "missing_score": 0.5, "formd_raised_bonus": 0.05, "formd_raised_revenue_max": 100,
+    "rd_sanity": {"revenue_min": 1000, "min_share": 0.005},
 }
 
 DEFAULT_ACADEMIC = {

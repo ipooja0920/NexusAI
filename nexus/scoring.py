@@ -57,11 +57,19 @@ PARTNERSHIP_SYSTEM_PROMPT = (
     "- R&D-driven company culture\n"
     "- Publication activity or conference participation\n"
     "- Startup/early-stage vs. established company dynamics\n"
-    "- Industry sector norms for academic engagement\n\n"
+    "- Industry sector norms for academic engagement\n"
+    "- The university track record given (past and current university partners on "
+    "federal SBIR/STTR awards and clinical trials, university research it funded "
+    "or co-wrote)\n\n"
+    "Judge from the company description and track record given, plus anything you "
+    "reliably know. A small or private company with little public information is "
+    "judged on what is given (an R&D-driven device or biotech startup is more likely "
+    "to partner than a distributor or a single clinic) - do not answer NA just "
+    "because the company is obscure.\n\n"
     "Return ONLY valid JSON with fields: "
     '{"company": <exact name>, "score": 1-9 integer OR "NA", "reason": string <= 40 words}.\n'
-    "RULE: If there is insufficient public information to assess, "
-    'set score to "NA" and reason to "No alignment information available".'
+    "RULE: Only if no company description is given and you know nothing about the "
+    'company, set score to "NA" and reason to "No alignment information available".'
 )
 
 FUNDING_SYSTEM_PROMPT = (

@@ -202,6 +202,7 @@ RESULT_COLUMNS = [
     ("Rank", "rank", 6),
     ("Company", "company", 30),
     ("Size", "size", 8),
+    ("Organisation Type", "organisation_type", 14),
     ("Justification", "justification", 60),
     ("Overall Score", "overall_score", 10),
     ("Sector Match", "sector_match", 14),
@@ -218,6 +219,8 @@ RESULT_COLUMNS = [
     ("Partnership Reason", "partnership_reason", 45),
     ("Funding Score (0-1)", "funding_score", 10),
     ("Funding Reason", "funding_reason", 40),
+    ("Status", "company_status", 14),
+    ("Parent Company", "parent_company", 24),
     ("Company Profile", "company_profile", 70),
 ]
 
@@ -226,7 +229,9 @@ ALL_COLUMNS = [
     ("Rank", "rank", 6),
     ("Company", "company", 30),
     ("Size", "size", 8),
+    ("Organisation Type", "organisation_type", 14),
     ("In 300 Pre-filter", "in_prefilter", 10),
+    ("Found By", "found_by", 16),
     ("Sector Match", "sector_match", 14),
     ("Website", "website", 24),
     ("Distance (mi)", "distance_miles", 10),
@@ -242,6 +247,8 @@ ALL_COLUMNS = [
     ("Funding Score (0-1)", "funding_score", 10),
     ("Funding Reason", "funding_reason", 40),
     ("Overall Score", "overall_score", 10),
+    ("Status", "company_status", 14),
+    ("Parent Company", "parent_company", 24),
     ("Company Profile", "company_profile", 70),
 ]
 

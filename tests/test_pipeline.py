@@ -95,7 +95,7 @@ class TestFullRun(PipelineTestCase):
             stages = {ws.cell(r, 1).value for r in range(2, ws.max_row + 1)}
             self.assertTrue(stages <= {"Top 20", "Secondary scored (top 40)",
                                        "Alignment scored", "Filtered out (pre-filter)",
-                                       "Not scored (no description)"})
+                                       "Not scored (no description)", "Alignment below 5"})
         finally:
             p.__exit__()
 
@@ -184,8 +184,10 @@ class TestCaching(PipelineTestCase):
             # 7 companies with a description x 2 faculty = 14 alignment calls
             # (Unknown Holdings has none and is not sent to the AI)
             self.assertEqual(counts.get("alignment", 0), 14)
-            # secondary scored once per company only, not once per faculty
-            self.assertEqual(counts.get("partnership", 0), 8)
+            # secondary scored once per company only, not once per faculty:
+            # the 6 that cleared min_alignment (Unknown has no description,
+            # Broken's alignment answer is unreadable)
+            self.assertEqual(counts.get("partnership", 0), 6)
             # Funding is arithmetic now, not a second LLM call. Zero here is
             # the point: it halves the API spend of a match run.
             self.assertEqual(counts.get("funding", 0), 0)

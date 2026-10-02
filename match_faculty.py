@@ -33,6 +33,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -44,7 +45,7 @@ from nexus.excel_io import (read_enriched, read_faculty, set_faculty_flag,
                             unique_path, write_faculty_output)
 from nexus.faculty_registration import (read_registration, research_profile,
                                         sector_match)
-from nexus.funding import company_academic_adjustment, company_funding_score
+from nexus.funding import _yes, company_academic_adjustment, company_funding_score
 from nexus.prefilter import (company_embedding_text, company_profile_text,
                              embed_text, rank_by_similarity, select_candidates)
 from nexus.scoring import (PARTNERSHIP_SYSTEM_PROMPT, normalize, score_alignment,
@@ -52,6 +53,7 @@ from nexus.scoring import (PARTNERSHIP_SYSTEM_PROMPT, normalize, score_alignment
 from nexus.settings import Settings
 
 ALIGN_VERSION = "v2"           # bump when the alignment prompt changes
+EXCLUDE_DEFAULT = ("Acquired", "Out of Business", "Liquidating")
 NO_TEXT_REASON = "No company description available - not scored"
 REGISTRATION_DEFAULT = "data/input/BDIFR Faculty Registration From-documents.csv"
 
@@ -160,15 +162,57 @@ def score_alignments(indices, companies, texts, profile, cfg, caches, client, al
     return n
 
 
+def _short(v, n=5) -> str:
+    items = [x.strip() for x in str(v).split(";") if x.strip()]
+    more = f" (+{len(items) - n} more)" if len(items) > n else ""
+    return "; ".join(items[:n]) + more
+
+
+def track_record_text(c: dict) -> str:
+    """The company's university record from SBIR, ClinicalTrials.gov and
+    OpenAlex, in words - so the partnership judgement rests on evidence, not
+    on whether the model has heard of the company."""
+    def has(k):
+        v = c.get(k)
+        return v is not None and not (isinstance(v, float) and v != v) and \
+            str(v).strip() not in ("", "-", "nan", "None")
+    lines = []
+    if has("university_past"):
+        lines.append(f"Past university partners on SBIR/STTR awards: {_short(c['university_past'])}")
+    if has("university_current"):
+        lines.append(f"Current university partners on SBIR/STTR awards: {_short(c['university_current'])}")
+    if has("ct_university_past"):
+        lines.append(f"Past university partners on clinical trials: {_short(c['ct_university_past'])}")
+    if has("ct_university_current"):
+        lines.append(f"Current university partners on clinical trials: {_short(c['ct_university_current'])}")
+    if _yes(c.get("oa_funded_university")):
+        yr = c.get("oa_last_funded_year")
+        lines.append("Paid for research papers written by universities"
+                     + (f" (latest {int(float(yr))})" if has("oa_last_funded_year") else ""))
+    if _yes(c.get("oa_coauthored_university")):
+        lines.append("Co-wrote research papers with universities")
+    if str(c.get("sbir_awarded") or "") == "Yes":
+        lines.append("Has won federal SBIR/STTR research awards")
+    if not lines:
+        return ("University track record: none found in SBIR, ClinicalTrials.gov "
+                "or OpenAlex records.")
+    return "University track record (SBIR, ClinicalTrials.gov, OpenAlex):\n- " + "\n- ".join(lines)
+
+
+def partnership_text(c: dict, text: str) -> str:
+    return f"{text}\n\n{track_record_text(c)}".strip() if text else track_record_text(c)
+
+
 def partnership_scores(indices, companies, texts, cfg, caches, client, memo):
     """Fill `memo` {company index: partnership dict} - AI, cached by
     company + profile text, so it is shared across faculty."""
     model = cfg.openai["scoring_model"]
     todo = []
+    ptexts = {gi: partnership_text(companies[gi], texts[gi]) for gi in indices}
     for gi in indices:
         if gi in memo:
             continue
-        hit = caches.get_company_scores(companies[gi]["company"], texts[gi])
+        hit = caches.get_company_scores(companies[gi]["company"], ptexts[gi])
         if hit is not None:
             memo[gi] = hit["partnership"]
         else:
@@ -176,7 +220,7 @@ def partnership_scores(indices, companies, texts, cfg, caches, client, memo):
 
     def one(gi):
         return score_secondary(client, model, companies[gi]["company"],
-                               PARTNERSHIP_SYSTEM_PROMPT, texts[gi],
+                               PARTNERSHIP_SYSTEM_PROMPT, ptexts[gi],
                                max_retries=cfg.openai["max_retries"],
                                rate_limit=cfg.openai["rate_limit_seconds"])
 
@@ -188,7 +232,7 @@ def partnership_scores(indices, companies, texts, cfg, caches, client, memo):
             memo[gi] = {"score": score, "reason": reason}
             caches.set_company_scores(companies[gi]["company"], memo[gi],
                                       {"score": None, "reason": "computed at match time"},
-                                      texts[gi])
+                                      ptexts[gi])
     caches.company_scores.save()
     return len(indices) - len(todo), len(todo)
 
@@ -214,8 +258,15 @@ def run_pass(candidate_idx, companies, texts, align, partner, cfg, caches, clien
                       w["revenue"] * c["revenue_score"] +
                       w["alignment"] * align_norm[gi]) / prelim_weight
 
+    # Only companies the AI judged at least `min_alignment` go on: in a tier
+    # where every company is close and well funded, distance and money would
+    # otherwise carry a 3/9 match into the top 20. A tab may list fewer than
+    # 20 - that is the honest answer.
+    min_align = cfg.funnel.get("min_alignment", 0) or 0
+    eligible = [gi for gi in candidate_idx
+                if align_nums[gi] is not None and align_nums[gi] >= min_align]
     cutoff = cfg.funnel["secondary_cutoff"]
-    ranked = sorted(candidate_idx, key=lambda i: prelim[i], reverse=True)
+    ranked = sorted(eligible, key=lambda i: prelim[i], reverse=True)
     top_secondary = ranked[:cutoff]
     cached, new = partnership_scores(top_secondary, companies, texts, cfg, caches,
                                      client, partner)
@@ -229,7 +280,11 @@ def run_pass(candidate_idx, companies, texts, align, partner, cfg, caches, clien
                 for gi in top_secondary}
     # Funding is NOT normalised (0.5 already means "no evidence"); the
     # academic nudge is added after normalising so it keeps its size.
-    p_adj = {gi: min(1.0, max(0.0, p_norm[gi] + academic[gi][0])) for gi in top_secondary}
+    # An NA partnership answer means "not known", not "unlikely": it counts as
+    # neutral (like a missing funding record), not as the lowest score
+    p_missing = cfg.funnel.get("partnership_missing", 0.5)
+    p_base = {gi: (p_norm[gi] if p_nums[gi] is not None else p_missing) for gi in top_secondary}
+    p_adj = {gi: min(1.0, max(0.0, p_base[gi] + academic[gi][0])) for gi in top_secondary}
     overall = {}
     for gi in top_secondary:
         c = companies[gi]
@@ -241,6 +296,7 @@ def run_pass(candidate_idx, companies, texts, align, partner, cfg, caches, clien
                        w["funding"] * funding[gi][0])
     final = sorted(overall, key=overall.get, reverse=True)[:cfg.funnel["final_top_n"]]
     return {"candidates": list(candidate_idx), "prelim": prelim, "secondary": top_secondary,
+            "eligible": set(eligible),
             "funding": funding, "academic": academic, "overall": overall, "final": final}
 
 
@@ -255,12 +311,20 @@ def _fmt(v, unit=""):
 
 
 def facts_for(gi, c, text, sector, align, partner, funding, academic) -> str:
+    org = c.get("organisation_type") or "Company"
+    status = c.get("company_status")
+    parent = c.get("parent_company")
     return "\n".join([
+        f"Organisation type: {org}"
+        + (f"; Capital IQ status: {status}" if status else "")
+        + (f"; subsidiary of {parent}" if parent else ""),
         f"Industry: {c.get('industry') or 'unknown'}"
         + (f" ({sector} named by the researcher)" if sector else ""),
         f"Company profile: {text or '(no description)'}",
         f"Alignment score {align['score']}/9: {align['reason']}",
-        f"Partnership score {partner['score']}/9: {partner['reason']}",
+        (f"Partnership score {partner['score']}/9: {partner['reason']}"
+         if partner["score"] != "NA" else
+         "Partnership likelihood: not known (counted as neutral)"),
         f"University track record: {academic[1]}",
         f"Money available: {funding[1]}",
         f"Distance from UConn Storrs: {_fmt(c.get('distance_miles'), ' miles')}",
@@ -291,6 +355,44 @@ def justifications(indices, companies, texts, sectors, profile, align, partner,
 # ----------------------------------------------------------------------
 # One faculty
 # ----------------------------------------------------------------------
+
+def prefilter_queries(fac: dict, profile: str) -> list:
+    """(label, text, picks per round) for the embedding pre-filter.
+
+    One embedding of a long research description is dominated by its
+    longest theme: for Julie Burland the ACL paragraph buried "wearables",
+    and Whoop and Empatica ranked 460th and 852nd. So each keyword, and the
+    stated industry interests, get their own search, and the candidates are
+    taken from every list in turn - the full profile for about half of the
+    places, the keyword and interest searches sharing the other half."""
+    others = []
+    if fac.get("source") == "registration":
+        kws = [k.strip() for k in re.split(r"[,;\n]+", fac.get("keywords") or "") if k.strip()]
+        for kw in kws[:8]:
+            others.append((f"keyword: {kw}", kw, 1))
+        if (fac.get("notes") or "").strip():
+            others.append(("industry interests", fac["notes"].strip(), 1))
+    # the full profile keeps about half of the places; the searches share the rest
+    return [("profile", profile, max(2, len(others)))] + others
+
+
+def round_robin(ranked_by: list, top_n: int) -> tuple:
+    """Interleave ranked lists -> (top_n distinct candidates, {index: label
+    of the search that found it first})."""
+    chosen, found_by = [], {}
+    pos = [0] * len(ranked_by)
+    while len(chosen) < top_n and any(pos[i] < len(r[2]) for i, r in enumerate(ranked_by)):
+        for i, (label, weight, ranked) in enumerate(ranked_by):
+            taken = 0
+            while taken < weight and pos[i] < len(ranked) and len(chosen) < top_n:
+                gi = ranked[pos[i]]
+                pos[i] += 1
+                if gi not in found_by:
+                    found_by[gi] = label
+                    chosen.append(gi)
+                    taken += 1
+    return chosen, found_by
+
 
 TIERS = ("Small", "Mid", "Large")
 
@@ -333,7 +435,16 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
     sectors = [sector_match(c.get("industry"), fac) for c in companies]
     tiers_cfg = cfg.raw.get("size_tiers") or {"small_below": 100, "large_from": 1000}
     tier = [size_tier(c.get("revenue_usdmm"), tiers_cfg) for c in companies]
-    members = {t: [gi for gi in range(n) if tier[gi] == t] for t in TIERS}
+    # Companies Capital IQ says are acquired, out of business or liquidating
+    # are left out of every tab (they still appear in All Companies)
+    exclude = set(cfg.funnel.get("exclude_status", EXCLUDE_DEFAULT) or [])
+    excluded = {gi for gi, c in enumerate(companies)
+                if str(c.get("company_status") or "").strip() in exclude}
+    if excluded:
+        print(f"  [status] {len(excluded):,} companies left out "
+              f"({', '.join(sorted(exclude))} in Capital IQ)")
+    members = {t: [gi for gi in range(n) if tier[gi] == t and gi not in excluded]
+               for t in TIERS}
     print("  [size] " + ", ".join(f"{t}: {len(members[t]):,}" for t in TIERS))
     titles = tier_titles(tiers_cfg)
     scoring.reset_usage()
@@ -345,17 +456,29 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
     small = members["Small"]
     top_n = cfg.prefilter["top_n_candidates"] if cfg.prefilter["enabled"] else 0
     sims = None
+    found_by = {}
     if top_n and top_n > 0 and len(small) > top_n:
-        profile_vec = embed_text(client, cfg.openai["embedding_model"], profile, caches)
         company_vecs = [caches.get_embedding(company_embedding_text(c["company"], texts[i]))
                         for i, c in enumerate(companies)]
         n_missing = sum(1 for v in company_vecs if v is None)
         if n_missing:
             print(f"  [prefilter] WARNING: {n_missing} companies have no embedding "
                   "(re-run enrich_companies.py) - they rank last in pre-filter")
-        sims = rank_by_similarity(profile_vec, company_vecs)
-        cand_a = [gi for gi in select_candidates(sims, 0) if tier[gi] == "Small"][:top_n]
-        print(f"  [prefilter] {len(small):,} small companies -> {len(cand_a)} candidates")
+        in_small = set(small)
+        ranked_by = []                      # (label, picks per round, ranked list)
+        for label, text, weight in prefilter_queries(fac, profile):
+            vec = embed_text(client, cfg.openai["embedding_model"], text, caches)
+            q_sims = rank_by_similarity(vec, company_vecs)
+            if label == "profile":
+                sims = q_sims
+            ranked_by.append((label, weight,
+                              [gi for gi in select_candidates(q_sims, 0) if gi in in_small]))
+        cand_a, found_by = round_robin(ranked_by, top_n)
+        counts = {}
+        for lab in found_by.values():
+            counts[lab] = counts.get(lab, 0) + 1
+        print(f"  [prefilter] {len(small):,} small companies -> {len(cand_a)} candidates "
+              f"({', '.join(f'{k}: {v}' for k, v in counts.items())})")
     else:
         cand_a = list(small)
     pre_label = f"{len(cand_a)} pre-filter" if len(cand_a) < len(small) else "all companies"
@@ -423,6 +546,9 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         p = partner.get(gi)
         return {
             "rank": rank, "company": c["company"], "size": tier[gi],
+            "organisation_type": c.get("organisation_type") or "Company",
+            "company_status": c.get("company_status"),
+            "parent_company": c.get("parent_company"),
             "justification": just.get(gi),
             "sector_match": sectors[gi] or None, "website": c.get("website"),
             "distance_miles": c.get("distance_miles"), "employees": c.get("employees"),
@@ -455,7 +581,11 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
     final_n, cutoff = cfg.funnel["final_top_n"], cfg.funnel["secondary_cutoff"]
     in_a = set(cand_a)
 
+    min_align = cfg.funnel.get("min_alignment", 0) or 0
+
     def stage_of(gi, w):
+        if gi in excluded:
+            return f"Left out ({companies[gi].get('company_status')})"
         if w is None:
             return "Not scored"
         if gi in w["rank"]:
@@ -465,6 +595,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         if gi in w["cand"]:
             if align.get(gi, {}).get("reason") == NO_TEXT_REASON:
                 return "Not scored (no description)"
+            if gi not in w["p"]["eligible"]:
+                return f"Alignment below {min_align:g}" if min_align else "Alignment scored"
             return "Alignment scored"
         if not texts[gi]:
             return "Not scored (no description)"
@@ -489,6 +621,7 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         r = row(gi, w["rank"].get(gi) if w else None)
         r["stage"] = stage_of(gi, w)
         r["in_prefilter"] = ("Yes" if gi in in_a else "No") if tier[gi] == "Small" else "All scored"
+        r["found_by"] = found_by.get(gi)
         r["overall_score"] = w["p"]["overall"].get(gi) if w else None
         if not w or gi not in w["sec"]:
             r["partnership_score"] = r["partnership_reason"] = None

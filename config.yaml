@@ -38,6 +38,7 @@ capitaliq:
   col_address: I        # "Offices" block
   col_description: K
   col_website: L
+  col_status: M         # "Company Status": Operating / Operating Subsidiary / Acquired / ...
 
 # --------- Faculty Database layout -----------------------------------
 faculty:
@@ -83,6 +84,14 @@ size_tiers:
 funnel:
   secondary_cutoff: 40    # top-N companies that get partnership/funding scoring
   final_top_n: 20         # companies written to the output workbook
+  # only companies with an AI alignment score of at least this reach the
+  # partnership step and a top tab (a tab may then list fewer than 20)
+  min_alignment: 5
+  # an NA partnership answer ("not known") counts as this, after the 1-9
+  # scores are scaled to 0-1 - neutral, not the lowest score
+  partnership_missing: 0.5
+  # Capital IQ "Company Status" values left out of every tab
+  exclude_status: [Acquired, Out of Business, Liquidating]
 
 # --------- Score weights (must sum to 1.0) ---------------------------
 weights:
@@ -154,6 +163,13 @@ funding:
   # a small plus, only for companies with no revenue or under $100m.
   formd_raised_bonus: 0.05
   formd_raised_revenue_max: 100
+  # SEC R&D sanity check: for a company with at least revenue_min ($USDmm)
+  # revenue, an R&D figure under min_share of revenue is not its R&D budget
+  # (SEC's standard tag sometimes holds a small item - J&J shows $109m
+  # against ~$98bn revenue) - so it is ignored, and the reason says so
+  rd_sanity:
+    revenue_min: 1000
+    min_share: 0.005
 
 # --------- Academic track record --------------------------------------
 # Data-driven adjustment ADDED to the partnership score (0-1 after

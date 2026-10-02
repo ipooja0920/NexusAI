@@ -46,6 +46,7 @@ from nexus.cache import Caches, _text_key
 from nexus.company_profile import build_profiles, cache_key, has_sources, source_text
 from nexus.excel_io import write_enriched
 from nexus.funding import company_academic_adjustment, company_funding_score
+from nexus.organisation import organisation_type, parent_company
 from nexus.geo import Geocoder, clean_address_block, distance_miles, select_address_block
 from nexus.prefilter import company_embedding_text, company_profile_text, embed_text
 from nexus.scoring import (distance_score, employee_score, parse_employees,
@@ -76,7 +77,7 @@ CT_ACTIVE = "ct_trials_active"   # only carried when its penalty is switched on
 
 BASE_COLUMNS = [
     "company", "website", "description", "address_cleaned", "company_type",
-    "industry", "latitude", "longitude", "geocode_provider", "distance_miles",
+    "industry", "company_status", "parent_company", "organisation_type", "latitude", "longitude", "geocode_provider", "distance_miles",
     "employees", "revenue_usdmm",
     "distance_score", "employee_score", "revenue_score",
     "funding_score", "funding_reason", "academic_adjustment", "academic_reason",
@@ -97,7 +98,8 @@ def capitaliq_names(cfg) -> dict:
     fields = {"company": "col_company", "website": "col_website",
               "address": "col_address", "description": "col_description",
               "employees": "col_employees", "revenue": "col_revenue",
-              "industry": "col_industry", "company_type": "col_company_type"}
+              "industry": "col_industry", "company_type": "col_company_type",
+              "status": "col_status"}
     return {f: hdr[column_index_from_string(str(ciq[k])) - 1]
             for f, k in fields.items() if ciq.get(k)}
 
@@ -237,6 +239,9 @@ def main() -> int:
             "address_cleaned": cleaned,
             "company_type": g("company_type"),
             "industry": g("industry"),
+            "company_status": g("status"),
+            "parent_company": parent_company(g("description")),
+            "organisation_type": organisation_type(company, g("description")),
             "latitude": lat, "longitude": lon,
             "geocode_provider": provider,
             "distance_miles": dist,

@@ -321,11 +321,14 @@ Settings in `config.yaml`.
 | employee_score | employees / 1,000, capped at 1 — unchanged |
 | revenue_score | Size fit: **1.0 for $100m–$1bn**; tapers to 0.2 at $5bn and stays 0.2; $5–100m = 0.4; under $5m = 0.2; no revenue = 0.5 |
 | funding_score | Money available now, best of: Form D raised since 2025 ($0.5m → 0, $20m → 1), SEC cash + short-term investments ($5m → 0, $100m → 1), SEC R&D ($1m → 0, $50m → 1), running SBIR/STTR awards ($0.1m → 0, $2m → 1), funded university papers in 2025+ (→ 1). Log scales; older figures pulled towards 0.5. No record = 0.5; Form D "raised: Yes" with nothing recent and revenue missing or < $100m = 0.55 |
-| funding_reason | The evidence behind it |
+| funding_reason | The evidence behind it. For a company with $1bn+ revenue, an SEC R&D figure under 0.5% of revenue is ignored and the reason says so (J&J's SEC R&D tag held $109m against ~$98bn revenue) — `funding.rd_sanity` in config |
 | academic_adjustment | Added to the partnership score at match time: +0.10 funded university papers, +0.05 each past SBIR university partner / past trial partner / co-wrote with universities, +0.03 any SBIR award (bonus capped at +0.15); −0.05 each current SBIR or trial university partner (capped at −0.10). Running trials: no penalty (switchable in config) |
 | academic_reason | Which of those applied |
 | research_focus | OpenAlex topics, trial conditions and the 3 newest SBIR project titles (kept for reference) |
 | company_profile | **What the matching reads about the company.** For the ~2,000 companies with SBIR, ClinicalTrials.gov or OpenAlex text: an AI-written ~150-word profile from the Capital IQ description + SBIR titles and abstracts (newest first, first 6,000 characters) + trial conditions and treatment types + OpenAlex topics — facts from those sources only, no people's names, no dollar amounts. Everyone else: the Capital IQ description. Embedded for the pre-filter and read by the alignment, partnership and justification prompts. Cached in `data/cache/company_profiles.json` |
+| company_status | Capital IQ "Company Status": Operating, Operating Subsidiary, Acquired, Out of Business, Liquidating, Reorganizing |
+| parent_company | The owner, when the description says "operates as a subsidiary of X" (e.g. Biorez → CONMED Corporation) |
+| organisation_type | `Company`, `Hospital / health system` or `Clinic / care provider` — from the name and the opening of the Capital IQ description; a description saying it develops / manufactures / designs / sells makes it a Company whatever the name. Animal hospitals count as clinics |
 | profile_from | `AI: Capital IQ description + sources`, `Capital IQ description`, or `Capital IQ description + research focus` (an AI profile could not be written) |
 
 Final score (`match_faculty.py`, weights unchanged): alignment 30%, distance
@@ -361,6 +364,8 @@ Johnson) sits in the tier of its own revenue, not its parent's.
 
 | Column | Meaning |
 |---|---|
+| Organisation Type | Company / Hospital / health system / Clinic / care provider — hospitals and clinics are listed, labelled, not removed |
+| Status, Parent Company | Capital IQ status; the owner of a subsidiary — the partner to approach |
 | Justification | 2–3 sentences: which of the researcher's keywords / problems / methods the company's work touches, then distance, size, money and university record as far as the figures support |
 | Size | Small / Mid / Large (above) |
 | Overall Score | Final weighted score (above) |
@@ -369,6 +374,21 @@ Johnson) sits in the tier of its own revenue, not its parent's.
 | Partnership Score (1-9), Reason | AI: how likely to partner, plus the academic track record |
 | Funding Score (0-1), Reason | From the enriched sheet |
 | Company Profile | The text the AI read |
+
+**Rules in every tab** (`funnel` in config.yaml):
+
+- Companies Capital IQ marks **Acquired, Out of Business or Liquidating** are left
+  out of the tabs (1,507); All Companies shows them as "Left out (…)".
+- Only companies with **alignment 5/9 or more** reach the partnership step and
+  a tab, so a tab may list fewer than 20 rather than pad with weak matches.
+- A partnership answer of **NA** ("not known") counts as **neutral (0.5)** after
+  the 1–9 scores are scaled — not as the lowest score. The partnership prompt
+  is given the company's university record (SBIR and trial university
+  partners, papers it funded or co-wrote) so it judges from evidence.
+- The **Small pre-filter** searches the full profile (about half the 300
+  places) and, for registration-form faculty, each keyword and the industry
+  interests separately (the other half). `Found By` in All Companies says
+  which search brought a company in.
 
 **All Companies** lists every company, grouped Small / Mid / Large, with its
 stage within its tier, `In 300 Pre-filter` (Yes/No for small companies, "All
