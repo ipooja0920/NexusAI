@@ -385,13 +385,14 @@ Johnson) sits in the tier of its own revenue, not its parent's.
   the 1–9 scores are scaled — not as the lowest score. The partnership prompt
   is given the company's university record (SBIR and trial university
   partners, papers it funded or co-wrote) so it judges from evidence.
-- The **Small pre-filter** searches the full profile (about half the 300
-  places) and, for registration-form faculty, each keyword and the industry
-  interests separately (the other half). `Found By` in All Companies says
-  which search brought a company in.
+- The **Small pre-filter** takes the 300 small companies closest to the full
+  profile (as always) and, for registration-form faculty, ADDS up to 30 more
+  from each keyword and from the industry-interests note searched on their own
+  (`prefilter.extra_per_search`) - about 450 in all. `Found By` in All
+  Companies says which search brought a company in.
 
 **All Companies** lists every company, grouped Small / Mid / Large, with its
-stage within its tier, `In 300 Pre-filter` (Yes/No for small companies, "All
+stage within its tier, `In Pre-filter` (Yes/No for small companies, "All
 scored" for mid and large) and scores. Alignment scores are cached
 (`data/cache/alignment_scores.json`), so an interrupted run resumes and the
 second pass reuses the first pass's 300 scores. Partnership scores are cached

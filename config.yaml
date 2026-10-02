@@ -69,6 +69,10 @@ prefilter:
   enabled: true
   top_n_candidates: 300   # companies passed to LLM scoring per faculty
                           # set to 0 to disable and score ALL companies
+  # registration-form faculty: each keyword and the industry-interests note
+  # are searched on their own and ADD up to this many companies each on top
+  # of the 300 (the 300 from the full profile are never reduced)
+  extra_per_search: 30
   # also run a second pass WITHOUT the pre-filter (AI-scores every company
   # with a description) and give it its own output tab; --no-full skips it
   full_run: true

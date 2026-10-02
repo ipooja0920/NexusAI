@@ -230,7 +230,7 @@ ALL_COLUMNS = [
     ("Company", "company", 30),
     ("Size", "size", 8),
     ("Organisation Type", "organisation_type", 14),
-    ("In 300 Pre-filter", "in_prefilter", 10),
+    ("In Pre-filter", "in_prefilter", 10),
     ("Found By", "found_by", 16),
     ("Sector Match", "sector_match", 14),
     ("Website", "website", 24),

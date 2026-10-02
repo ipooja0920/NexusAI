@@ -293,7 +293,7 @@ class TestPrefilterActivation(PipelineTestCase):
             self.assertIn("Small - 3 pre-filter", wb.sheetnames)
             self.assertIn("Small - all companies", wb.sheetnames)
             ws = wb["All Companies"]
-            inpf = column(ws, "In 300 Pre-filter")
+            inpf = column(ws, "In Pre-filter")
             self.assertEqual([ws.cell(r, inpf).value for r in range(2, ws.max_row + 1)].count("Yes"), 3)
         finally:
             p.__exit__()
@@ -320,7 +320,7 @@ class TestPrefilterActivation(PipelineTestCase):
             p.run_enrich()
             p.run_match()
             ws = openpyxl.load_workbook(p.outputs()[0])["All Companies"]
-            inpf = column(ws, "In 300 Pre-filter")
+            inpf = column(ws, "In Pre-filter")
             kept = {ws.cell(r, 3).value for r in range(2, ws.max_row + 1)
                     if ws.cell(r, inpf).value == "Yes"}
             self.assertIn("Catalyst Works LLC", kept)

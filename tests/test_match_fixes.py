@@ -14,7 +14,7 @@ from pathlib import Path
 import openpyxl
 import pandas as pd
 
-from match_faculty import (partnership_text, prefilter_queries, round_robin, run_pass,
+from match_faculty import (combine_searches, partnership_text, prefilter_queries, run_pass,
                            track_record_text)
 from nexus.cache import Caches
 from nexus.funding import company_funding_score
@@ -109,15 +109,16 @@ class TestPrefilterQueries(unittest.TestCase):
         labels = [q[0] for q in prefilter_queries(fac, "PROFILE")]
         self.assertEqual(labels, ["profile", "keyword: biomechanics", "keyword: wearables",
                                   "keyword: gait", "industry interests"])
-        self.assertEqual(prefilter_queries({"research": "x"}, "P"), [("profile", "P", 2)])
-        # the profile keeps about half the places
-        self.assertEqual(prefilter_queries(fac, "P")[0][2], 4)
+        self.assertEqual(prefilter_queries({"research": "x"}, "P"), [("profile", "P")])
 
-    def test_round_robin(self):
-        chosen, by = round_robin([("profile", 2, [1, 2, 3, 4]), ("kw", 1, [2, 9, 8])], 5)
-        self.assertEqual(chosen, [1, 2, 9, 3, 4])
-        self.assertEqual(by[9], "kw")
-        self.assertEqual(by[2], "profile")
+    def test_profile_keeps_all_its_places_and_searches_add(self):
+        profile = list(range(100))                       # its own ranking
+        kw = [5, 3, 200, 201, 202, 203]                  # 5 and 3 already picked
+        chosen, by = combine_searches([("profile", profile), ("kw", kw)], top_n=10, extra=3)
+        self.assertEqual(chosen[:10], list(range(10)))   # the profile top 10, untouched
+        self.assertEqual(chosen[10:], [200, 201, 202])   # 3 NEW ones added on top
+        self.assertEqual(by[200], "kw")
+        self.assertEqual(by[5], "profile")
 
 
 def _company(name, dist=0.5):

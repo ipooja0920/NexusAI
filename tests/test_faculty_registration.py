@@ -60,7 +60,7 @@ class TestRunByRow(unittest.TestCase):
         install_fake_openai()
 
     def test_row_run_two_tabs_with_justification(self):
-        p = TempProject(config_overrides={"prefilter": {"top_n_candidates": 3}})
+        p = TempProject(config_overrides={"prefilter": {"top_n_candidates": 3, "extra_per_search": 0}})
         p.__enter__()
         try:
             p.seed_geocodes()

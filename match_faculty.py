@@ -357,40 +357,39 @@ def justifications(indices, companies, texts, sectors, profile, align, partner,
 # ----------------------------------------------------------------------
 
 def prefilter_queries(fac: dict, profile: str) -> list:
-    """(label, text, picks per round) for the embedding pre-filter.
+    """(label, text) for the embedding pre-filter: the full profile, then -
+    for registration-form faculty - each keyword and the stated industry
+    interests on their own.
 
     One embedding of a long research description is dominated by its
     longest theme: for Julie Burland the ACL paragraph buried "wearables",
-    and Whoop and Empatica ranked 460th and 852nd. So each keyword, and the
-    stated industry interests, get their own search, and the candidates are
-    taken from every list in turn - the full profile for about half of the
-    places, the keyword and interest searches sharing the other half."""
-    others = []
+    and Whoop and Empatica ranked 460th and 852nd."""
+    queries = [("profile", profile)]
     if fac.get("source") == "registration":
         kws = [k.strip() for k in re.split(r"[,;\n]+", fac.get("keywords") or "") if k.strip()]
         for kw in kws[:8]:
-            others.append((f"keyword: {kw}", kw, 1))
+            queries.append((f"keyword: {kw}", kw))
         if (fac.get("notes") or "").strip():
-            others.append(("industry interests", fac["notes"].strip(), 1))
-    # the full profile keeps about half of the places; the searches share the rest
-    return [("profile", profile, max(2, len(others)))] + others
+            queries.append(("industry interests", fac["notes"].strip()))
+    return queries
 
 
-def round_robin(ranked_by: list, top_n: int) -> tuple:
-    """Interleave ranked lists -> (top_n distinct candidates, {index: label
-    of the search that found it first})."""
+def combine_searches(ranked_by: list, top_n: int, extra: int) -> tuple:
+    """The full-profile search keeps its top `top_n` exactly as before; each
+    other search ADDS up to `extra` companies of its own on top (ones the
+    profile search did not already pick). -> (candidates, {index: label of
+    the search that brought it in})."""
     chosen, found_by = [], {}
-    pos = [0] * len(ranked_by)
-    while len(chosen) < top_n and any(pos[i] < len(r[2]) for i, r in enumerate(ranked_by)):
-        for i, (label, weight, ranked) in enumerate(ranked_by):
-            taken = 0
-            while taken < weight and pos[i] < len(ranked) and len(chosen) < top_n:
-                gi = ranked[pos[i]]
-                pos[i] += 1
-                if gi not in found_by:
-                    found_by[gi] = label
-                    chosen.append(gi)
-                    taken += 1
+    for k, (label, ranked) in enumerate(ranked_by):
+        limit = top_n if k == 0 else extra
+        added = 0
+        for gi in ranked:
+            if added >= limit:
+                break
+            if gi not in found_by:
+                found_by[gi] = label
+                chosen.append(gi)
+                added += 1
     return chosen, found_by
 
 
@@ -466,14 +465,14 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
                   "(re-run enrich_companies.py) - they rank last in pre-filter")
         in_small = set(small)
         ranked_by = []                      # (label, picks per round, ranked list)
-        for label, text, weight in prefilter_queries(fac, profile):
+        for label, text in prefilter_queries(fac, profile):
             vec = embed_text(client, cfg.openai["embedding_model"], text, caches)
             q_sims = rank_by_similarity(vec, company_vecs)
             if label == "profile":
                 sims = q_sims
-            ranked_by.append((label, weight,
-                              [gi for gi in select_candidates(q_sims, 0) if gi in in_small]))
-        cand_a, found_by = round_robin(ranked_by, top_n)
+            ranked_by.append((label, [gi for gi in select_candidates(q_sims, 0) if gi in in_small]))
+        cand_a, found_by = combine_searches(ranked_by, top_n,
+                                            int(cfg.prefilter.get("extra_per_search", 30)))
         counts = {}
         for lab in found_by.values():
             counts[lab] = counts.get(lab, 0) + 1
@@ -481,7 +480,7 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
               f"({', '.join(f'{k}: {v}' for k, v in counts.items())})")
     else:
         cand_a = list(small)
-    pre_label = f"{len(cand_a)} pre-filter" if len(cand_a) < len(small) else "all companies"
+    pre_label = f"{top_n} pre-filter" if len(cand_a) < len(small) else "all companies"
 
     if small:
         print(f"\n  Small - {pre_label}")
