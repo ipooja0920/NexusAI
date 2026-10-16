@@ -37,6 +37,7 @@ _MAKER = re.compile(
     r"discovers|commercializes|markets|sells|distributes|supplies|"
     r"developer|manufacturer|distributor|supplier|maker|wholesaler|"
     r"offers (?:a |an )?(?:software|platform|products?|devices?|systems?))\b", re.I)
+_HOSP_DBA = re.compile(r"\bdoing business as [^,.;]{0,60}?\b(hospital|medical cent(?:er|re))\b", re.I)
 _HOSP_DESC = re.compile(
     r"\b(operates|owns and operates|owns|operates as|is|runs)\s+(?:a |an |as a |as an )?"
     r"(?:\w+[- ]){0,4}?(hospitals?|health ?systems?|healthcare system|health care system|"
@@ -45,7 +46,9 @@ _CLIN_DESC = re.compile(
     r"(\bprovides?\s+(?:\w+[ ,-]+){0,5}?(health ?care|medical|nursing|home health|"
     r"physical therapy|occupational therapy|rehabilitation|dental|therapy|care|clinical|"
     r"physician|surgical|veterinary|mental health|behavioral health|counseling|hospice|"
-    r"diagnostic|treatment|imaging|laboratory testing) services"
+    r"diagnostic|treatment|imaging|laboratory testing|psychotherapy|psychiatry|"
+    r"psychiatric) services"
+    r"|\bprovides? (?:primary |general |comprehensive )?medical care\b"
     r"|\b(operates|owns and operates|operates as|is)\s+(?:a |an |as a |as an )?(?:\w+[- ]){0,4}?"
     r"(clinics?|practices?|nursing homes?|nursing facilit\w+|surgery cent\w+|urgent care|"
     r"physical therapy|rehabilitation cent\w+|treatment cent\w+|senior living|"
@@ -98,7 +101,7 @@ def organisation_type(name, description) -> str:
     # an animal hospital is a veterinary clinic, not a health system
     if _VET.search(name) or _VET.search(opening):
         return CLINIC
-    if _HOSP_NAME.search(name) or _HOSP_DESC.search(opening):
+    if _HOSP_NAME.search(name) or _HOSP_DESC.search(opening) or _HOSP_DBA.search(opening):
         return HOSPITAL
     if _CLIN_DESC.search(opening) or _CLIN_NAME.search(name):
         return CLINIC

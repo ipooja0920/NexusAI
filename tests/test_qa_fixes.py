@@ -59,6 +59,35 @@ class TestVeterinary(unittest.TestCase):
             "Elizabeth C Shurland Dvm", "Provides As An Animal Specialties Veterinarian."), CLINIC)
 
 
+class TestCareProvidersFromRun4(unittest.TestCase):
+    """Providers that were listed as companies in the Mid tab."""
+
+    def test_doing_business_as_medical_center(self):
+        from nexus.organisation import HOSPITAL
+        self.assertEqual(organisation_type(
+            "Southern Maine Health Care",
+            "Southern Maine Health Care, doing business as Southern Maine Medical Center, "
+            "provides medical care and services."), HOSPITAL)
+
+    def test_psychotherapy_services(self):
+        self.assertEqual(organisation_type(
+            "The Center For Behavioral Health Inc.",
+            "The Center for Behavioral Health, Inc. provides individual, family, and group "
+            "psychotherapy services."), CLINIC)
+        self.assertEqual(organisation_type(
+            "Talkspace, Inc.",
+            "Talkspace, Inc., together with its subsidiaries, operates as a virtual behavioral "
+            "healthcare company that connects patients with licensed mental health providers "
+            "in the United States. The company provides psychotherapy and psychiatry services "
+            "to treat various conditions."), CLINIC)
+
+    def test_software_company_stays_company(self):
+        self.assertEqual(organisation_type(
+            "CareCloud, Inc.", "CareCloud, Inc., a healthcare information technology company, "
+            "provides technology-enabled business solutions, Software-as-a-Service offerings, "
+            "and related business services to healthcare providers."), COMPANY)
+
+
 class TestStubDescriptions(unittest.TestCase):
 
     def test_code_like_stubs(self):
