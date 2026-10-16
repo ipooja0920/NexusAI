@@ -118,27 +118,60 @@ def to_num(score_str):
 # AI calls, parallel and cached
 # ----------------------------------------------------------------------
 
+def combine_votes(votes) -> dict:
+    """One alignment answer from several asks of the same question: the
+    middle score (the lower middle for an even count), so one odd answer is
+    outvoted. NA only when most answers are NA. The reason is the one given
+    with the middle score; `votes` lists every answer, e.g. "8, 4, 7"."""
+    nums = sorted(to_num(v["score"]) for v in votes if to_num(v["score"]) is not None)
+    shown = ", ".join(str(v["score"]) for v in votes)
+    if not nums or len(nums) * 2 < len(votes):
+        na = next((v for v in votes if to_num(v["score"]) is None), votes[0])
+        return {"score": "NA", "reason": na["reason"], "votes": shown}
+    mid = nums[(len(nums) - 1) // 2]
+    reason = next(v["reason"] for v in votes if to_num(v["score"]) == mid)
+    return {"score": str(mid), "reason": reason, "votes": shown}
+
+
 def score_alignments(indices, companies, texts, profile, cfg, caches, client, align):
-    """Fill `align` {company index: {"score", "reason"}} for `indices`."""
+    """Fill `align` {company index: {"score", "reason", "votes"}} for
+    `indices`. Each company is asked `openai.alignment_votes` times (default
+    3) and given the middle score - one ask can swing by several points.
+    Every answer is cached on its own, so a re-run or a change in the number
+    of votes only pays for the answers it does not have yet."""
     model = cfg.openai["scoring_model"]
-    todo = []
+    n_votes = max(1, int(cfg.openai.get("alignment_votes", 3) or 1))
+    todo = []                      # (company index, vote number, cache key)
+    got = {}                       # company index -> {vote number: answer}
     for gi in indices:
         if gi in align:
             continue
         if not texts[gi]:
-            align[gi] = {"score": "NA", "reason": NO_TEXT_REASON}
+            align[gi] = {"score": "NA", "reason": NO_TEXT_REASON, "votes": None}
             continue
         c = companies[gi]
         key = f"{ALIGN_VERSION}|{model}|{profile}|||{c['company']}|{c.get('industry')}|{texts[gi]}"
-        hit = caches.get_alignment(key)
-        if hit:
-            align[gi] = hit
-        else:
-            todo.append((gi, key))
+        got[gi] = {}
+        for k in range(1, n_votes + 1):
+            vkey = key if k == 1 else f"{key}#vote{k}"
+            hit = caches.get_alignment(vkey)
+            if hit:
+                got[gi][k] = {"score": hit["score"], "reason": hit["reason"]}
+            else:
+                todo.append((gi, k, vkey))
+
+    def finish():
+        for gi, answers in got.items():
+            if len(answers) == n_votes:
+                align[gi] = combine_votes([answers[k] for k in sorted(answers)])
+
     if not todo:
+        finish()
         return 0
     n, t0 = len(todo), time.time()
     step = 20 if n <= 400 else 500
+    print(f"  [alignment] {n} answers to get ({n_votes} per company, "
+          f"{sum(len(a) for a in got.values())} from cache)")
 
     def one(gi):
         c = companies[gi]
@@ -150,28 +183,30 @@ def score_alignments(indices, companies, texts, profile, cfg, caches, client, al
     done = 0
     pool = ThreadPoolExecutor(max_workers=int(cfg.openai.get("concurrency", 16)))
     try:
-        futures = {pool.submit(one, gi): (gi, key) for gi, key in todo}
+        futures = {pool.submit(one, gi): (gi, k, vkey) for gi, k, vkey in todo}
         for fut in as_completed(futures):
-            gi, key = futures[fut]
+            gi, k, vkey = futures[fut]
             score, reason = fut.result()
-            align[gi] = {"score": score, "reason": reason}
+            got[gi][k] = {"score": score, "reason": reason}
             if score != "NA" or reason != scoring.STD_NA_REASON:
-                caches.set_alignment(key, align[gi])
+                caches.set_alignment(vkey, got[gi][k])
             done += 1
             if done % step == 0 or done == n:
-                print(f"  [alignment] {done}/{n} scored ({time.time()-t0:.0f}s)")
+                print(f"  [alignment] {done}/{n} answers ({time.time()-t0:.0f}s)")
             if done % 500 == 0:
                 caches.alignment.save()
     except KeyboardInterrupt:
         # Ctrl-C: drop the queued calls instead of waiting for all of them,
-        # and keep every score already made for the re-run
-        print("\n  [alignment] stopping - saving the scores made so far ...")
+        # and keep every answer already made for the re-run
+        print("\n  [alignment] stopping - saving the answers made so far ...")
         pool.shutdown(wait=False, cancel_futures=True)
         caches.alignment.save()
         raise
     pool.shutdown(wait=True)
     caches.alignment.save()
-    failed = sum(1 for gi, _ in todo if align[gi]["reason"] == scoring.STD_NA_REASON)
+    finish()
+    failed = sum(1 for gi in {g for g, _, _ in todo}
+                 if align[gi]["score"] == "NA" and align[gi]["reason"] == scoring.STD_NA_REASON)
     if failed:
         print(f"  [alignment] {failed} got no usable answer (shown as NA) - they are "
               "not cached, so a re-run retries just those")
@@ -692,6 +727,7 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
             "revenue_score": c["revenue_score"],
             "alignment_score": a["score"] if a else None,
             "alignment_reason": a["reason"] if a else None,
+            "alignment_votes": a.get("votes") if a else None,
             "partnership_score": p["score"] if p else None,
             "partnership_reason": (f'{p["reason"]} | Track record {academic[gi][1]}'
                                    if p and gi in academic else (p["reason"] if p else None)),
@@ -799,6 +835,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         "faculty_source": (f"Registration form, row {fac['row']}"
                            if fac.get("source") == "registration" else "Faculty Database"),
         "scoring_model": cfg.openai["scoring_model"],
+        "alignment_votes": f"{max(1, int(cfg.openai.get('alignment_votes', 3) or 1))} "
+                           "(the middle score is used)",
         "embedding_model": cfg.openai["embedding_model"],
         "n_companies": n,
         "size_tiers": ", ".join(f"{t}: {len(members[t]):,}" for t in TIERS)

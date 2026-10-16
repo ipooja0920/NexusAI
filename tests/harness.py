@@ -220,6 +220,9 @@ class TempProject:
             "review_dir": str(self.dir / "data" / "review"),
             "output_dir": str(self.dir / "data" / "output"),
         }
+        # one alignment ask per company, so call counts in tests are company
+        # counts; the voting is tested on its own (test_alignment_votes.py)
+        cfg.setdefault("openai", {})["alignment_votes"] = 1
         for section, values in self.config_overrides.items():
             cfg.setdefault(section, {}).update(values)
         with open(self.dir / "config.yaml", "w", encoding="utf-8") as fh:

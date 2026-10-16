@@ -374,7 +374,8 @@ score can be set (`funnel.min_alignment`, off by default).
 | Size | Small / Mid / Large (above) |
 | Overall Score | Final weighted score (above) |
 | Sector Match | `Primary sector` / `Secondary sector`: the company's Capital IQ industry group is the one the researcher named. Capital IQ here holds only two industry groups (Health Care Equipment and Services; Pharmaceuticals, Biotechnology and Life Sciences) |
-| Alignment Score (1-9), Reason | AI: research ↔ company profile |
+| Alignment Score (1-9), Reason | AI: research ↔ company profile (the middle of 3 answers) |
+| Alignment Votes | The 3 answers the middle score came from |
 | Partnership Score (1-9), Reason | AI: how likely to partner, plus the academic track record |
 | Funding Score (0-1), Reason | From the enriched sheet |
 | Company Profile | The text the AI read |
@@ -392,6 +393,11 @@ score can be set (`funnel.min_alignment`, off by default).
   and only then by the condition or body part. A company treating the same
   condition with a different kind of product (implant, drug, biologic) scores
   5-6, not 8-9; an unrelated company scores 1-2 (NA only for no description).
+- **Alignment is asked 3 times per company** (`openai.alignment_votes`) and
+  the middle score is used - one ask can swing by several points (8 one run,
+  4 the next). `Alignment Votes` shows all three answers (e.g. "8, 4, 7");
+  the reason shown is the one given with the middle score. Each answer is
+  cached on its own, so re-runs cost nothing extra.
 - **Alignment 1-2 means no named link.** A company whose description names
   none of the researcher's methods, tools, conditions, body parts or patient
   groups scores 1-2, not 3; 3-4 needs something specific but loose.

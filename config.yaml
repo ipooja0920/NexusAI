@@ -63,6 +63,9 @@ openai:
   concurrency: 16             # AI calls in flight at once (lower it if you
                               # hit OpenAI rate-limit errors)
   profile_model:              # model for the company profiles; blank = scoring_model
+  # each company's alignment is asked this many times and the middle score
+  # is used: one ask can swing by several points (8 one run, 4 the next)
+  alignment_votes: 3
 
 # --------- Pre-filter (embedding similarity) -------------------------
 prefilter:
