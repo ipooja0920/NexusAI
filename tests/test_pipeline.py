@@ -481,9 +481,12 @@ class TestFullFlagAndProviders(PipelineTestCase):
             p.run_enrich()
             cfg = p.settings()
             df = pd.read_excel(cfg.companies_enriched)
-            df["organisation_type"] = df["organisation_type"].astype(object)
-            df.loc[df.company == "Catalyst Works LLC", "organisation_type"] = "Hospital / health system"
-            df.loc[df.company == "Quiet Insurance Group", "organisation_type"] = "Clinic / care provider"
+            # labels are recomputed from the description at match time
+            df["description"] = df["description"].astype(object)
+            df.loc[df.company == "Catalyst Works LLC", "description"] = (
+                "Catalyst Works LLC owns and operates a hospital in New England.")
+            df.loc[df.company == "Quiet Insurance Group", "description"] = (
+                "Quiet Insurance Group operates physical therapy clinics.")
             with pd.ExcelWriter(cfg.companies_enriched) as w:
                 df.to_excel(w, index=False, sheet_name="Companies")
             p.run_match()

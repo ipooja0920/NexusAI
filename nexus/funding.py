@@ -257,10 +257,10 @@ def company_academic_adjustment(company: dict, cfg: dict) -> tuple:
         "oa_funded_university": "paid for university research (OpenAlex)",
         "oa_coauthored_university": "co-wrote papers with universities",
         "sbir_university_past": "past SBIR/STTR university partner",
-        "ct_university_past": "past clinical-trial university partner",
+        "ct_university_past": "past clinical-trial academic partner",
         "sbir_awarded": "SBIR/STTR award history",
         "sbir_university_current": "current SBIR/STTR university partner",
-        "ct_university_current": "current clinical-trial university partner",
+        "ct_university_current": "current clinical-trial academic partner",
         "ct_trials_active": "many running clinical trials",
     }
     if not used:

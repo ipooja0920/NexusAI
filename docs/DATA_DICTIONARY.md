@@ -95,7 +95,7 @@ trials (never ran) are left out of every column; trials with status
 |---|---|---|---|---|---|
 | ct_match_name | text | The company as ClinicalTrials.gov spells it (commonest spelling) | For unconfirmed / ambiguous rows, the candidate(s) | `Abiomed Inc.` | 1,645 |
 | ct_match_by | text | How the match was made | `name` only — trial records carry no sponsor website or address, so a similar name cannot be confirmed and stays `unconfirmed` | `name` | 909 name; 736 unconfirmed |
-| ct_university_current | text | Universities / hospitals on its **running** trials | Partners of running trials, most trials first, top 10 then `(+N more)` | `Yale University; UConn Health` | 148 |
+| ct_university_current | text | Universities / hospitals / non-profits on its **running** trials (names with a company legal form and no academic word - CROs, drug makers ClinicalTrials.gov files as non-industry - are left out) | Partners of running trials, most trials first, top 10 then `(+N more)` | `Yale University; UConn Health` | 148 |
 | ct_university_past | text | The same for **ended** trials | Partners of ended trials, minus any in current | `Duke University` | 337 |
 | ct_trials_active | number | Running trials | Count; 0 = matched but nothing running | `3` | 909 (443 above 0) |
 | ct_active_phase | text | Highest phase among running trials | `Phase 1` … `Phase 4`; blank if none running or no phases (e.g. device studies) | `Phase 3` | 319 |
@@ -328,7 +328,7 @@ Settings in `config.yaml`.
 | company_profile | **What the matching reads about the company.** For the ~2,000 companies with SBIR, ClinicalTrials.gov or OpenAlex text: an AI-written ~150-word profile from the Capital IQ description + SBIR titles and abstracts (newest first, first 6,000 characters) + trial conditions and treatment types + OpenAlex topics — facts from those sources only, no people's names, no dollar amounts. Everyone else: the Capital IQ description. Embedded for the pre-filter and read by the alignment, partnership and justification prompts. Cached in `data/cache/company_profiles.json` |
 | company_status | Capital IQ "Company Status": Operating, Operating Subsidiary, Acquired, Out of Business, Liquidating, Reorganizing |
 | parent_company | The owner, when the description says "operates as a subsidiary of X" (e.g. Biorez → CONMED Corporation) |
-| organisation_type | `Company`, `Contract manufacturer`, `Hospital / health system` or `Clinic / care provider` — from the name and the opening of the Capital IQ description. Contract manufacturer: the description says contract manufacturing / CDMO / outsourced manufacturing / manufacturing services (unless it first says the company develops its own products). A description saying it develops / manufactures / designs / sells makes it a Company whatever the name. Animal hospitals count as clinics |
+| organisation_type | `Company`, `Contract manufacturer`, `Hospital / health system` or `Clinic / care provider` — from the name and the opening of the Capital IQ description. Contract manufacturer: the description says contract manufacturing / CDMO / outsourced manufacturing / manufacturing services (unless it first says the company develops its own products). A description saying it develops / manufactures / designs / sells makes it a Company whatever the name. Veterinary care settings (animal hospitals, vet clinics and practices, DVMs) count as clinics; animal-health companies (drugs, feed, diagnostics) are Companies. `match_faculty.py` recomputes this and parent_company from the description at every run, so a rule fix needs no re-enrich |
 | profile_from | `AI: Capital IQ description + sources`, `Capital IQ description`, or `Capital IQ description + research focus` (an AI profile could not be written) |
 
 Final score (`match_faculty.py`, weights unchanged): alignment 30%, distance
@@ -384,7 +384,7 @@ score can be set (`funnel.min_alignment`, off by default).
 - Companies Capital IQ marks **Acquired, Out of Business or Liquidating** are left
   out of the tabs (1,507); All Companies shows them as "Left out (…)".
 - **Minimum alignment per size tier** (`funnel.min_alignment_by_tier`):
-  Mid and Large need an AI alignment score of at least **3/9** to reach the
+  Mid and Large need an AI alignment score of at least **4/9** to reach the
   partnership step and a tab (they have few companies, so unrelated ones -
   gene editing, oncology - otherwise filled them); Small has no minimum.
 - **Alignment rewards methods over condition.** The AI judges first by HOW the
@@ -392,6 +392,19 @@ score can be set (`funnel.min_alignment`, off by default).
   and only then by the condition or body part. A company treating the same
   condition with a different kind of product (implant, drug, biologic) scores
   5-6, not 8-9; an unrelated company scores 1-2 (NA only for no description).
+- **Alignment 1-2 means no named link.** A company whose description names
+  none of the researcher's methods, tools, conditions, body parts or patient
+  groups scores 1-2, not 3; 3-4 needs something specific but loose.
+- **Capital IQ stub descriptions** - blank, "-", or code-like abbreviations
+  ("Ofcs Clns Of Mdl D", "Sklld Nrsng Cr Fclt") - count as no description
+  (about 380 companies): not scored, and no pre-filter place.
+- **A corporate group is listed once.** A parent and its subsidiaries (from
+  "operates as a subsidiary of X", the same named parent, or the same name
+  without ticker / legal form / Holdings - for names of two or more words)
+  appear once per tab, by their best-placed member; across the size tabs the
+  member with the higher alignment stays (a tie goes to the larger tier). The
+  others show "Same group as X (listed)" in All Companies, and the tab fills
+  the place with its next company.
 - **Justifications start with the verdict**: "Strong fit" (alignment 7-9),
   "Moderate fit" (5-6), "Weak fit" (1-4) or "Fit unclear" (NA).
 - A partnership answer of **NA** ("not known") counts as **neutral (0.5)** after
@@ -401,7 +414,8 @@ score can be set (`funnel.min_alignment`, off by default).
 - The **Small pre-filter** takes the 300 small companies closest to the full
   profile (as always) and, for registration-form faculty, ADDS up to 30 more
   from each keyword and from the industry-interests note searched on their own
-  (`prefilter.extra_per_search`) - about 450 in all. `Found By` in All
+  (`prefilter.extra_per_search`) - about 450 in all, only companies with a
+  description (one without can never be scored). `Found By` in All
   Companies says which search brought a company in.
 
 **No outside knowledge.** Every AI step is told to use only the text it is

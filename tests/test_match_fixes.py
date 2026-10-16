@@ -170,8 +170,11 @@ class TestPipeline(unittest.TestCase):
             df["company_status"] = df["company_status"].astype(object)
             df.loc[df.company == "Catalyst Works LLC", "company_status"] = "Acquired"
             df.loc[df.company == "Pyro Energy Inc.", "company_status"] = "Operating Subsidiary"
-            df["parent_company"] = df["parent_company"].astype(object)
-            df.loc[df.company == "Pyro Energy Inc.", "parent_company"] = "Big Energy Corp"
+            # labels are recomputed from the description at match time
+            df["description"] = df["description"].astype(object)
+            m = df.company == "Pyro Energy Inc."
+            df.loc[m, "description"] = (df.loc[m, "description"].fillna("") +
+                                        " Pyro Energy Inc. operates as a subsidiary of Big Energy Corp.")
             with pd.ExcelWriter(cfg.companies_enriched) as w:
                 df.to_excel(w, index=False, sheet_name="Companies")
             FakeOpenAI.reset()
@@ -237,8 +240,8 @@ class TestReviewFixes(unittest.TestCase):
         from match_faculty import tier_min_alignment
         cfg = Settings()
         self.assertEqual(tier_min_alignment(cfg, "Small"), 0)
-        self.assertEqual(tier_min_alignment(cfg, "Mid"), 3)
-        self.assertEqual(tier_min_alignment(cfg, "Large"), 3)
+        self.assertEqual(tier_min_alignment(cfg, "Mid"), 4)
+        self.assertEqual(tier_min_alignment(cfg, "Large"), 4)
 
     def test_verdict(self):
         from match_faculty import verdict
@@ -247,7 +250,7 @@ class TestReviewFixes(unittest.TestCase):
                           "Weak fit", "Weak fit", "Fit unclear"])
 
     def test_mid_large_floor_in_a_run(self):
-        """Every company listed in Mid / Large scored at least 3; Small has no floor."""
+        """Every company listed in Mid / Large scored at least 4; Small has no floor."""
         install_fake_openai()
         faculty = [("Prof Dental", "X", "Y", "orthodontic enamel bonding", "", "", "N")]
         p = TempProject(faculty=faculty)
@@ -259,7 +262,7 @@ class TestReviewFixes(unittest.TestCase):
             wb = openpyxl.load_workbook(p.outputs()[0])
             mid = wb["Mid ($100m-$1bn) - top 50"]
             col = [c.value for c in mid[1]].index("Alignment Score (1-9)") + 1
-            self.assertTrue(all(int(mid.cell(r, col).value) >= 3 for r in range(2, mid.max_row + 1)))
+            self.assertTrue(all(int(mid.cell(r, col).value) >= 4 for r in range(2, mid.max_row + 1)))
             j = [c.value for c in mid[1]].index("Justification") + 1
             for ws in wb.worksheets[:2]:
                 for r in range(2, ws.max_row + 1):

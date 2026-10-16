@@ -94,7 +94,7 @@ funnel:
   # Mid and Large have few companies, so without a floor unrelated ones
   # (gene editing, oncology) fill their tabs.
   min_alignment: 0
-  min_alignment_by_tier: {Small: 0, Mid: 3, Large: 3}
+  min_alignment_by_tier: {Small: 0, Mid: 4, Large: 4}
   # an NA partnership answer ("not known") counts as this, after the 1-9
   # scores are scaled to 0-1 - neutral, not the lowest score
   partnership_missing: 0.5

@@ -193,7 +193,7 @@ class TestAcademicAdjustment(unittest.TestCase):
                "ct_university_current": "UConn Health", "sbir_awarded": "Yes"}
         adj, reason = company_academic_adjustment(row, ACA)
         self.assertAlmostEqual(adj, 0.15 - 0.05)
-        self.assertIn("current clinical-trial university partner", reason)
+        self.assertIn("current clinical-trial academic partner", reason)
 
     def test_true_false_read_back_as_numbers(self):
         """pandas reads a True/False column with blanks as 1.0 / 0.0 - the

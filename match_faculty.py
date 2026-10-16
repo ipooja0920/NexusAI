@@ -46,13 +46,16 @@ from nexus.excel_io import (read_enriched, read_faculty, set_faculty_flag,
 from nexus.faculty_registration import (read_registration, research_profile,
                                         sector_match)
 from nexus.funding import _yes, company_academic_adjustment, company_funding_score
+from nexus.groups import build_groups, pick_listed
+from nexus.organisation import academic_partners, organisation_type, parent_company
 from nexus.prefilter import (company_embedding_text, company_profile_text,
-                             embed_text, rank_by_similarity, select_candidates)
+                             embed_text, is_stub_description, rank_by_similarity,
+                             select_candidates)
 from nexus.scoring import (PARTNERSHIP_SYSTEM_PROMPT, normalize, score_alignment,
                            score_secondary, write_justification)
 from nexus.settings import Settings
 
-ALIGN_VERSION = "v4"           # bump when the alignment prompt changes
+ALIGN_VERSION = "v5"           # bump when the alignment prompt changes
 PARTNER_VERSION = "p2"         # bump when the partnership prompt changes
 EXCLUDE_DEFAULT = ("Acquired", "Out of Business", "Liquidating")
 NO_TEXT_REASON = "No company description available - not scored"
@@ -86,9 +89,21 @@ def company_text(c: dict) -> str:
     (Capital IQ description + SBIR / trials / OpenAlex), or for an older
     enriched file the description + research focus."""
     prof = c.get("company_profile")
-    if prof and str(prof).strip() not in ("", "-", "nan", "None"):
+    if not is_stub_description(prof):
         return str(prof).strip()
     return company_profile_text(c.get("description"), c.get("research_focus"))
+
+
+def prepare_companies(companies) -> None:
+    """Labels recomputed from the current rules, so a rule fix needs no
+    re-enrich: organisation type and parent from the name and description,
+    and clinical-trial partners without the companies ClinicalTrials.gov
+    files as non-industry (CROs, drug makers)."""
+    for c in companies:
+        c["organisation_type"] = organisation_type(c.get("company"), c.get("description"))
+        c["parent_company"] = parent_company(c.get("description"))
+        for k in ("ct_university_past", "ct_university_current"):
+            c[k] = academic_partners(c.get(k))
 
 
 def to_num(score_str):
@@ -183,9 +198,9 @@ def track_record_text(c: dict) -> str:
     if has("university_current"):
         lines.append(f"Current university partners on SBIR/STTR awards: {_short(c['university_current'])}")
     if has("ct_university_past"):
-        lines.append(f"Past university partners on clinical trials: {_short(c['ct_university_past'])}")
+        lines.append(f"Past academic and non-profit partners on clinical trials: {_short(c['ct_university_past'])}")
     if has("ct_university_current"):
-        lines.append(f"Current university partners on clinical trials: {_short(c['ct_university_current'])}")
+        lines.append(f"Current academic and non-profit partners on clinical trials: {_short(c['ct_university_current'])}")
     if _yes(c.get("oa_funded_university")):
         yr = c.get("oa_last_funded_year")
         lines.append("Paid for research papers written by universities"
@@ -276,7 +291,7 @@ def verdict(score) -> str:
 
 
 def run_pass(candidate_idx, companies, texts, align, partner, cfg, caches, client,
-             min_align=None):
+             min_align=None, groups=None):
     w = cfg.weights
     n = len(companies)
     cand = set(candidate_idx)
@@ -333,13 +348,51 @@ def run_pass(candidate_idx, companies, texts, align, partner, cfg, caches, clien
                        w["partnership"] * p_adj[gi] +
                        w["funding"] * funding[gi][0])
     final_n = cfg.funnel["final_top_n"]
-    final_comp = sorted(comp, key=overall.get, reverse=True)[:final_n]
-    final_prov = sorted(prov, key=overall.get, reverse=True)[:final_n]
+    groups = groups if groups is not None else [None] * n
+    # one member per corporate group (parent and subsidiaries listed once)
+    comp_order = sorted(comp, key=overall.get, reverse=True)
+    prov_order = sorted(prov, key=overall.get, reverse=True)
+    final_comp, gave_way = pick_listed(comp_order, groups, final_n)
+    final_prov, gave_way_p = pick_listed(prov_order, groups, final_n)
+    gave_way.update(gave_way_p)
     final = sorted(final_comp + final_prov, key=overall.get, reverse=True)
     return {"candidates": list(candidate_idx), "prelim": prelim, "secondary": top_secondary,
             "eligible": set(eligible), "funding": funding, "academic": academic,
             "overall": overall, "final": final,
-            "final_companies": final_comp, "final_providers": final_prov}
+            "final_companies": final_comp, "final_providers": final_prov,
+            "comp_order": comp_order, "prov_order": prov_order, "gave_way": gave_way}
+
+
+TIER_PRIORITY = {"Large": 2, "Mid": 1, "Small": 0}
+
+
+def dedupe_across_tiers(widest, groups, align, final_n) -> None:
+    """A corporate group listed in more than one size tab keeps the member
+    with the higher alignment score (a tie goes to the larger tier); the
+    other tabs fill the place with their next company. Updates each pass's
+    final lists and its gave_way record in place."""
+    blocked = {t: set() for t in widest}
+    for _ in range(10):
+        members = {}
+        for t, (_, p) in widest.items():
+            for gi in p["final_companies"]:
+                if groups[gi] is not None:
+                    members.setdefault(groups[gi], []).append((t, gi))
+        clashes = {g: m for g, m in members.items() if len(m) > 1}
+        if not clashes:
+            return
+        for g, m in clashes.items():
+            win = max(m, key=lambda x: (to_num(align.get(x[1], {}).get("score")) or 0,
+                                        TIER_PRIORITY.get(x[0], 0)))
+            for t, _ in m:
+                if t != win[0]:
+                    blocked[t].add(g)
+        for t, (_, p) in widest.items():
+            fc, gw = pick_listed(p["comp_order"], groups, final_n, blocked[t])
+            p["final_companies"] = fc
+            p["gave_way"] = {**gw, **{k: v for k, v in p["gave_way"].items()
+                                      if k in set(p["prov_order"])}}
+            p["final"] = sorted(fc + p["final_providers"], key=p["overall"].get, reverse=True)
 
 
 # ----------------------------------------------------------------------
@@ -503,6 +556,7 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
                for t in TIERS}
     print("  [size] " + ", ".join(f"{t}: {len(members[t]):,}" for t in TIERS))
     titles = tier_titles(tiers_cfg)
+    groups = build_groups(companies)
     scoring.reset_usage()
     t_start = time.time()
     align, partner = {}, {}
@@ -520,7 +574,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         if n_missing:
             print(f"  [prefilter] WARNING: {n_missing} companies have no embedding "
                   "(re-run enrich_companies.py) - they rank last in pre-filter")
-        in_small = set(small)
+        # a company with no description can never be scored - it gets no seat
+        in_small = {gi for gi in small if texts[gi]}
         ranked_by = []                      # (label, picks per round, ranked list)
         for label, text in prefilter_queries(fac, profile):
             vec = embed_text(client, cfg.openai["embedding_model"], text, caches)
@@ -544,7 +599,7 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         score_alignments(cand_a, companies, texts, profile, cfg, caches, client, align)
         passes.append((f"Small - {pre_label}", "Small",
                        run_pass(cand_a, companies, texts, align, partner, cfg, caches, client,
-                                min_align=tier_min_alignment(cfg, "Small"))))
+                                min_align=tier_min_alignment(cfg, "Small"), groups=groups)))
 
     # ---------- Small: every company (no pre-filter) ----------
     if small and full and len(cand_a) < len(small):
@@ -576,7 +631,7 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
                   f"about {remaining * per / 60:.0f} minutes")
         passes.append((title, "Small",
                        run_pass(cand_b, companies, texts, align, partner, cfg, caches, client,
-                                min_align=tier_min_alignment(cfg, "Small"))))
+                                min_align=tier_min_alignment(cfg, "Small"), groups=groups)))
 
     # ---------- Mid and Large: score them all ----------
     for t in ("Mid", "Large"):
@@ -586,13 +641,15 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         score_alignments(members[t], companies, texts, profile, cfg, caches, client, align)
         passes.append((titles[t], t, run_pass(members[t], companies, texts, align, partner,
                                               cfg, caches, client,
-                                              min_align=tier_min_alignment(cfg, t))))
+                                              min_align=tier_min_alignment(cfg, t),
+                                              groups=groups)))
 
     # ---------- One tab per size tier, from its widest pass ----------
     final_n, cutoff = cfg.funnel["final_top_n"], cfg.funnel["secondary_cutoff"]
     widest = {}
     for title, t, p in passes:
         widest[t] = (title, p)             # later passes of a tier are the wider ones
+    dedupe_across_tiers(widest, groups, align, final_n)
 
     def tab_title(t, title):
         if t == "Small":
@@ -606,7 +663,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
     # providers beyond the combined sheet's top N are not listed - no justification
     prov_all = sorted(((widest[t][1]["overall"][gi], gi) for t in TIERS if t in widest
                        for gi in widest[t][1]["final_providers"]), reverse=True)
-    unlisted = {gi for _, gi in prov_all[final_n:]}
+    prov_listed, prov_gave_way = pick_listed([gi for _, gi in prov_all], groups, final_n)
+    unlisted = {gi for _, gi in prov_all} - set(prov_listed)
     finals = [gi for gi in finals if gi not in unlisted]
     funding, academic = {}, {}
     for _, _, p in passes:
@@ -654,16 +712,22 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
             rows.append(r)
         tabs[tab_title(t, title)] = rows
     # hospitals and clinics of every size on one sheet, best first
-    prov = sorted(((p["overall"][gi], gi) for t in TIERS if t in widest
-                   for p in [widest[t][1]] for gi in p["final_providers"]), reverse=True)
+    prov_score = {gi: widest[t][1]["overall"][gi] for t in TIERS if t in widest
+                  for gi in widest[t][1]["final_providers"]}
+    prov = [(prov_score[gi], gi) for gi in prov_listed]
     rows = []
-    for rank, (score, gi) in enumerate(prov[:final_n], start=1):
+    for rank, (score, gi) in enumerate(prov, start=1):
         r = row(gi, rank)
         r["overall_score"] = score
         rows.append(r)
     tabs[f"{PROVIDER_TAB} - top {final_n}"] = rows
     listed = {gi for t in TIERS if t in widest for gi in widest[t][1]["final_companies"]}
-    listed |= {gi for _, gi in prov[:final_n]}
+    listed |= set(prov_listed)
+    # members of a corporate group that gave way to another member
+    listed_in_group = {groups[gi]: gi for gi in listed if groups[gi] is not None}
+    gave_way = set(prov_gave_way)
+    for t in widest:
+        gave_way |= set(widest[t][1]["gave_way"])
 
     # All Companies: every company, ranked within its size tier
     in_a = set(cand_a)
@@ -677,6 +741,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         if gi in listed:
             return (f"Listed ({PROVIDER_TAB})" if is_provider(companies[gi])
                     else f"Listed (top {final_n})")
+        if gi in gave_way and groups[gi] in listed_in_group:
+            return f"Same group as {companies[listed_in_group[groups[gi]]]['company']} (listed)"
         if gi in w["sec"]:
             return f"Secondary scored (top {cutoff})"
         if gi in w["cand"]:
@@ -819,6 +885,7 @@ def main() -> int:
 
     companies_df = read_enriched(cfg.companies_enriched)
     companies = companies_df.where(companies_df.notna(), None).to_dict("records")
+    prepare_companies(companies)
     print(f"Company datasource: {len(companies)} companies (enriched)")
     full = (args.full or bool(cfg.prefilter.get("full_run", False))) and not args.no_full
 

@@ -7,9 +7,30 @@ returning the indices of the top-N candidates for LLM scoring.
 """
 from __future__ import annotations
 
+import re
 from typing import List, Optional, Sequence
 
 import numpy as np
+
+_WORD = re.compile(r"[A-Za-z]+")
+_VOWEL = re.compile(r"[aeiou]", re.I)
+
+
+def is_stub_description(text) -> bool:
+    """True for a description that says nothing: blank, "-", or one of
+    Capital IQ's short industry-code abbreviations ("Ofcs Clns Of Mdl D",
+    "Sklld Nrsng Cr Fclt") - most of its words have no vowel after the
+    first letter."""
+    t = "" if text is None or (isinstance(text, float) and text != text) else str(text).strip()
+    if t in ("", "-", "nan", "None"):
+        return True
+    if len(t) >= 60:
+        return False
+    words = [w for w in _WORD.findall(t) if len(w) >= 3]
+    if not words:
+        return True
+    abbreviated = sum(1 for w in words if not _VOWEL.search(w[1:]))
+    return abbreviated / len(words) >= 0.5
 
 
 def embed_text(client, model: str, text: str, caches=None) -> Optional[list]:
@@ -41,8 +62,7 @@ def company_profile_text(description: Optional[str],
                          research_focus: Optional[str] = None) -> str:
     """Description plus research focus - what the alignment scorer reads."""
     def clean(v):
-        v = "" if v is None else str(v).strip()
-        return "" if v in ("", "-", "nan", "None") else v
+        return "" if is_stub_description(v) else str(v).strip()
     desc, focus = clean(description), clean(research_focus)
     return f"{desc}\n\nResearch focus: {focus}".strip() if focus else desc
 

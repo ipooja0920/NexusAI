@@ -45,7 +45,9 @@ all of them; trials whose status is UNKNOWN count as ended.
   ct_match_by           name | ambiguous | unconfirmed. Trial records carry
                         no sponsor website or address, so only a SAME name
                         can match - a similar one stays "unconfirmed"
-  ct_university_current universities / hospitals on its RUNNING trials,
+  ct_university_current universities / hospitals / non-profits on its RUNNING
+                        trials (names with a company legal form and no
+                        academic word - CROs, drug makers - are left out),
                         most trials first, top 10 then "(+N more)"
   ct_university_past    the same for ENDED trials, minus current
   ct_trials_active      number of running trials (0 = none running)
@@ -165,6 +167,7 @@ from openpyxl.utils import column_index_from_string
 from nexus.matching import (name_parts, same_name,
                             normalise_company_name, state_code,
                             website_domain, zip5, zip_from_address)
+from nexus.organisation import academic_partners
 from nexus.settings import Settings
 
 SBIR_COLUMNS = [
@@ -579,6 +582,9 @@ def summarise_ctgov(path: Path) -> dict:
     c["conditions"] = c["conditions"].map(
         lambda v: html.unescape(v) if isinstance(v, str) else v)
     c["is_active"] = c["is_active"].astype(str).str.lower() == "true"
+    # ClinicalTrials.gov files some companies (CROs, drug makers) as
+    # non-industry partners - only academic and non-profit ones are kept
+    c["partners"] = c["partners"].map(academic_partners)
     c["key"] = c["company"].map(ct_key)
     c = c[c["key"] != ""]
     out = {}

@@ -64,7 +64,15 @@ _CONTRACT = re.compile(
     re.I)
 # a developer of its own products that ALSO sells manufacturing services
 _DEVELOPER = re.compile(r"\b(develops?|developing|discovers|commercializ\w*)\b", re.I)
-_VET = re.compile(r"\b(animal|veterinar\w*|pet care)\b", re.I)
+# a veterinary CARE setting (animal hospital, vet clinic or practice) - not an
+# animal-health company that makes drugs, feed or diagnostics
+_VET = re.compile(
+    r"\b(animal (?:hospitals?|clinics?|medical|care|emergency|health cent(?:er|re)s?)|"
+    r"veterinar\w* (?:hospitals?|clinics?|practices?|services|care|specialists?|"
+    r"medical|cent(?:er|re)s?|group|associates|surgeons?|emergency)|"
+    r"veterinar\w* (?:partners|medicine facilit\w*|telehealth)|veterinarians?|dvms?|"
+    r"animal health care services|care for pets|animal\b[\w &,]{0,40}\bhospital|"
+    r"pet (?:care|hospital|clinic)|vet (?:clinic|hospital|care)|televet\w*)\b", re.I)
 _PARENT = re.compile(
     r"\boperates as (?:a |an )?(?:wholly[- ]owned )?subsidiary of\s+([^.;]+?)\s*(?:\.(?:\s|$)|;|$)",
     re.I)
@@ -106,3 +114,41 @@ def parent_company(description):
         return None
     parent = m.group(1).strip().rstrip(",")
     return parent or None
+
+
+# ClinicalTrials.gov files every non-industry collaborator as "OTHER" -
+# mostly universities, hospitals and foundations, but also some companies
+# (CROs, drug makers). A name with a company legal form and no academic or
+# non-profit word is a company, not an academic partner.
+_LEGAL_FORM = re.compile(
+    r"\b(inc|llc|l\.l\.c|ltd|limited|gmbh|corp|corporation|co|plc|s\.?a|s\.?p\.?a|ag|"
+    r"b\.?v|n\.?v|pty|lp|llp|s\.?r\.?l|k\.?k)\b\.?", re.I)
+_ACADEMIC = re.compile(
+    r"univ|college|school|hosp|h[oô]pita|institut|foundation|society|association|"
+    r"academ|council|trust|charit|medical cent|health system|clinic|cancer cent|"
+    r"research cent|nhs|federation|alliance|consortium|network|fund\b|league|"
+    r"coalition|ministry|agency|nonprofit|non-profit", re.I)
+_MORE = re.compile(r"\s*\(\+(\d+) more\)\s*$")
+
+
+def is_company_name(name) -> bool:
+    n = "" if name is None else str(name)
+    return bool(_LEGAL_FORM.search(n)) and not _ACADEMIC.search(n)
+
+
+def academic_partners(value):
+    """'; '-joined partner names with the company names taken out; None if
+    nothing is left. A trailing '(+N more)' is kept as it is."""
+    if value is None or (isinstance(value, float) and value != value):
+        return None
+    s = str(value).strip()
+    if s in ("", "-", "nan", "None"):
+        return None
+    m = _MORE.search(s)
+    more = m.group(0) if m else ""
+    if m:
+        s = s[:m.start()]
+    kept = [x.strip() for x in s.split(";") if x.strip() and not is_company_name(x.strip())]
+    if not kept:
+        return None
+    return "; ".join(kept) + more
