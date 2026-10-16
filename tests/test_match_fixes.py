@@ -197,7 +197,8 @@ class TestPipeline(unittest.TestCase):
     def test_weak_matches_never_fill_a_tab(self):
         faculty = [("Prof Dental", "X", "Y", "orthodontic enamel bonding", "", "", "N")]
         # the floor is optional (off by default) - switched on here
-        p = TempProject(faculty=faculty, config_overrides={"funnel": {"min_alignment": 5}})
+        p = TempProject(faculty=faculty, config_overrides={"funnel": {
+            "min_alignment": 5, "min_alignment_by_tier": {"Small": 5, "Mid": 5, "Large": 5}}})
         p.__enter__()
         try:
             p.seed_geocodes()
@@ -220,3 +221,49 @@ class TestPipeline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReviewFixes(unittest.TestCase):
+    """From Julie Burland's review: methods over condition, a floor for Mid
+    and Large, and justifications that start with the verdict."""
+
+    def test_alignment_prompt_ranks_methods_over_condition(self):
+        from nexus.scoring import ALIGNMENT_SYSTEM_PROMPT as P
+        self.assertIn("HOW the researcher works", P)
+        self.assertIn("different approach", P)
+        self.assertIn("unrelated company scores 1-2, not NA", P)
+
+    def test_tier_minimums(self):
+        from match_faculty import tier_min_alignment
+        cfg = Settings()
+        self.assertEqual(tier_min_alignment(cfg, "Small"), 0)
+        self.assertEqual(tier_min_alignment(cfg, "Mid"), 3)
+        self.assertEqual(tier_min_alignment(cfg, "Large"), 3)
+
+    def test_verdict(self):
+        from match_faculty import verdict
+        self.assertEqual([verdict(x) for x in ("9", "7", "6", "5", "4", "1", "NA")],
+                         ["Strong fit", "Strong fit", "Moderate fit", "Moderate fit",
+                          "Weak fit", "Weak fit", "Fit unclear"])
+
+    def test_mid_large_floor_in_a_run(self):
+        """Every company listed in Mid / Large scored at least 3; Small has no floor."""
+        install_fake_openai()
+        faculty = [("Prof Dental", "X", "Y", "orthodontic enamel bonding", "", "", "N")]
+        p = TempProject(faculty=faculty)
+        p.__enter__()
+        try:
+            p.seed_geocodes()
+            p.run_enrich()
+            self.assertEqual(p.run_match(), 0)
+            wb = openpyxl.load_workbook(p.outputs()[0])
+            mid = wb["Mid ($100m-$1bn) - top 50"]
+            col = [c.value for c in mid[1]].index("Alignment Score (1-9)") + 1
+            self.assertTrue(all(int(mid.cell(r, col).value) >= 3 for r in range(2, mid.max_row + 1)))
+            j = [c.value for c in mid[1]].index("Justification") + 1
+            for ws in wb.worksheets[:2]:
+                for r in range(2, ws.max_row + 1):
+                    self.assertTrue(str(ws.cell(r, j).value).split(":")[0] in
+                                    ("Strong fit", "Moderate fit", "Weak fit", "Fit unclear"))
+        finally:
+            p.__exit__()

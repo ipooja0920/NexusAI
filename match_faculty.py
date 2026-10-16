@@ -52,7 +52,7 @@ from nexus.scoring import (PARTNERSHIP_SYSTEM_PROMPT, normalize, score_alignment
                            score_secondary, write_justification)
 from nexus.settings import Settings
 
-ALIGN_VERSION = "v3"           # bump when the alignment prompt changes
+ALIGN_VERSION = "v4"           # bump when the alignment prompt changes
 PARTNER_VERSION = "p2"         # bump when the partnership prompt changes
 EXCLUDE_DEFAULT = ("Acquired", "Out of Business", "Liquidating")
 NO_TEXT_REASON = "No company description available - not scored"
@@ -257,7 +257,26 @@ def is_provider(c: dict) -> bool:
     return (c.get("organisation_type") or "") in PROVIDERS
 
 
-def run_pass(candidate_idx, companies, texts, align, partner, cfg, caches, client):
+def tier_min_alignment(cfg, tier: str) -> float:
+    """Minimum AI alignment score for a tier (funnel.min_alignment_by_tier,
+    else funnel.min_alignment; 0 = no minimum)."""
+    by_tier = cfg.funnel.get("min_alignment_by_tier") or {}
+    if tier in by_tier:
+        return by_tier[tier] or 0
+    return cfg.funnel.get("min_alignment", 0) or 0
+
+
+def verdict(score) -> str:
+    """The plain-words verdict a justification starts with, from the 1-9
+    alignment score."""
+    v = to_num(score)
+    if v is None:
+        return "Fit unclear"
+    return "Strong fit" if v >= 7 else "Moderate fit" if v >= 5 else "Weak fit"
+
+
+def run_pass(candidate_idx, companies, texts, align, partner, cfg, caches, client,
+             min_align=None):
     w = cfg.weights
     n = len(companies)
     cand = set(candidate_idx)
@@ -274,8 +293,9 @@ def run_pass(candidate_idx, companies, texts, align, partner, cfg, caches, clien
                       w["revenue"] * c["revenue_score"] +
                       w["alignment"] * align_norm[gi]) / prelim_weight
 
-    # optional floor on the AI alignment score (funnel.min_alignment, 0 = off)
-    min_align = cfg.funnel.get("min_alignment", 0) or 0
+    # optional floor on the AI alignment score (per tier, 0 = off)
+    if min_align is None:
+        min_align = cfg.funnel.get("min_alignment", 0) or 0
     eligible = [gi for gi in candidate_idx
                 if align_nums[gi] is not None and align_nums[gi] >= min_align]
     cutoff = cfg.funnel["secondary_cutoff"]
@@ -337,6 +357,7 @@ def facts_for(gi, c, text, sector, align, partner, funding, academic) -> str:
     status = c.get("company_status")
     parent = c.get("parent_company")
     return "\n".join([
+        f"Verdict to start with: {verdict(align['score'])}",
         f"Organisation type: {org}"
         + (f"; Capital IQ status: {status}" if status else "")
         + (f"; subsidiary of {parent}" if parent else ""),
@@ -358,7 +379,8 @@ def plain_justification(c: dict, align: dict, funding: tuple) -> str:
     """A justification made only of our data, for when the written one
     cannot be trusted."""
     tr = track_record_text(c).replace("\n- ", "; ").replace(":;", ":")
-    return (f"Alignment {align['score']}/9 (AI, from the company profile): {align['reason']} "
+    return (f"{verdict(align['score'])}: alignment {align['score']}/9 (AI, from the company "
+            f"profile): {align['reason']} "
             f"{tr}. Money: {funding[1]} Distance from Storrs: "
             f"{_fmt(c.get('distance_miles'), ' miles')}.")
 
@@ -374,7 +396,10 @@ def justifications(indices, companies, texts, sectors, profile, align, partner,
                                    facts, max_retries=cfg.openai["max_retries"])
         # the AI failed or kept adding things not in our data: write it plainly
         # from the data instead
-        return text or plain_justification(companies[gi], align[gi], funding[gi])
+        if not text:
+            return plain_justification(companies[gi], align[gi], funding[gi])
+        v = verdict(align[gi]["score"])
+        return text if text.lower().startswith(v.lower()) else f"{v}: {text}"
 
     out = {}
     with ThreadPoolExecutor(max_workers=int(cfg.openai.get("concurrency", 16))) as pool:
@@ -518,7 +543,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         print(f"\n  Small - {pre_label}")
         score_alignments(cand_a, companies, texts, profile, cfg, caches, client, align)
         passes.append((f"Small - {pre_label}", "Small",
-                       run_pass(cand_a, companies, texts, align, partner, cfg, caches, client)))
+                       run_pass(cand_a, companies, texts, align, partner, cfg, caches, client,
+                                min_align=tier_min_alignment(cfg, "Small"))))
 
     # ---------- Small: every company (no pre-filter) ----------
     if small and full and len(cand_a) < len(small):
@@ -549,7 +575,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
             print(f"  [sample] the full pass would need ~{remaining:,} more calls: "
                   f"about {remaining * per / 60:.0f} minutes")
         passes.append((title, "Small",
-                       run_pass(cand_b, companies, texts, align, partner, cfg, caches, client)))
+                       run_pass(cand_b, companies, texts, align, partner, cfg, caches, client,
+                                min_align=tier_min_alignment(cfg, "Small"))))
 
     # ---------- Mid and Large: score them all ----------
     for t in ("Mid", "Large"):
@@ -558,7 +585,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         print(f"\n  {titles[t]}: all {len(members[t]):,} companies")
         score_alignments(members[t], companies, texts, profile, cfg, caches, client, align)
         passes.append((titles[t], t, run_pass(members[t], companies, texts, align, partner,
-                                              cfg, caches, client)))
+                                              cfg, caches, client,
+                                              min_align=tier_min_alignment(cfg, t))))
 
     # ---------- One tab per size tier, from its widest pass ----------
     final_n, cutoff = cfg.funnel["final_top_n"], cfg.funnel["secondary_cutoff"]
@@ -640,9 +668,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
     # All Companies: every company, ranked within its size tier
     in_a = set(cand_a)
 
-    min_align = cfg.funnel.get("min_alignment", 0) or 0
-
     def stage_of(gi, w):
+        min_align = tier_min_alignment(cfg, tier[gi])
         if gi in excluded:
             return f"Left out ({companies[gi].get('company_status')})"
         if w is None:

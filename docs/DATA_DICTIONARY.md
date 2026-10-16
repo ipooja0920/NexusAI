@@ -383,8 +383,17 @@ score can be set (`funnel.min_alignment`, off by default).
 
 - Companies Capital IQ marks **Acquired, Out of Business or Liquidating** are left
   out of the tabs (1,507); All Companies shows them as "Left out (…)".
-- `funnel.min_alignment` (off by default) can require an alignment score
-  before a company reaches the partnership step and a tab.
+- **Minimum alignment per size tier** (`funnel.min_alignment_by_tier`):
+  Mid and Large need an AI alignment score of at least **3/9** to reach the
+  partnership step and a tab (they have few companies, so unrelated ones -
+  gene editing, oncology - otherwise filled them); Small has no minimum.
+- **Alignment rewards methods over condition.** The AI judges first by HOW the
+  researcher works (what they measure, build, test or use - their keywords)
+  and only then by the condition or body part. A company treating the same
+  condition with a different kind of product (implant, drug, biologic) scores
+  5-6, not 8-9; an unrelated company scores 1-2 (NA only for no description).
+- **Justifications start with the verdict**: "Strong fit" (alignment 7-9),
+  "Moderate fit" (5-6), "Weak fit" (1-4) or "Fit unclear" (NA).
 - A partnership answer of **NA** ("not known") counts as **neutral (0.5)** after
   the 1–9 scores are scaled — not as the lowest score. The partnership prompt
   is given the company's university record (SBIR and trial university

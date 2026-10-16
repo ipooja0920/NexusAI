@@ -90,8 +90,11 @@ funnel:
   secondary_cutoff: 100   # top-N per tab that get the partnership score
   final_top_n: 50         # companies listed in each size tab
   # optional floor: only companies with an AI alignment score of at least
-  # this reach the partnership step and a tab (0 = off, the default)
+  # this reach the partnership step and a tab (0 = off). Per size tier:
+  # Mid and Large have few companies, so without a floor unrelated ones
+  # (gene editing, oncology) fill their tabs.
   min_alignment: 0
+  min_alignment_by_tier: {Small: 0, Mid: 3, Large: 3}
   # an NA partnership answer ("not known") counts as this, after the 1-9
   # scores are scaled to 0-1 - neutral, not the lowest score
   partnership_missing: 0.5
