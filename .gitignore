@@ -12,3 +12,7 @@ __pycache__/
 
 # detached run logs
 logs/
+
+# local working files (faculty data, run output) - never committed
+Claude outputs/
+nohup.out
