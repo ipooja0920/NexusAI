@@ -1,4 +1,4 @@
-# NexusAI — Faculty ↔ Company Matching
+# BridgeAI — Faculty ↔ Company Matching
 
 Matches UConn faculty research profiles against a Capital IQ company
 datasource and produces a ranked top-20 workbook per faculty member.
