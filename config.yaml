@@ -24,6 +24,9 @@ paths:
   cache_dir: data/cache                              # geocode / embedding / score caches
   review_dir: data/review                            # name-match review workbooks
   output_dir: data/output                            # per-faculty result workbooks
+  # faculty scholarly contributions exports (Name, Title, Type, Year read);
+  # one CSV per faculty or several in one file - matched by Name
+  publications: data/input/publications
 
 # --------- Capital IQ export layout (same as screening reports) ------
 capitaliq:
@@ -80,6 +83,15 @@ prefilter:
   # (hours of AI calls). Default off: the pre-filter keeps every candidate
   # relevant. One run can opt in with --full.
   full_run: false
+
+# --------- Faculty publications ---------------------------------------
+# weight = age weight x type weight; recent work counts most, older still counts
+publications:
+  age_weights: [[5, 1.0], [10, 0.6], [15, 0.4]]   # up to N years old -> weight
+  older: 0.25                 # older than the last step
+  no_year: 1.0                # no year = forthcoming
+  type_weights: {journal erratum: 0.0, erratum: 0.0, poster: 0.5, presentation: 0.5}
+  prompt_titles: 12           # top titles by weight the AI reads
 
 # --------- Company size tiers (revenue, $USDmm) ----------------------
 # Each faculty's output ranks companies separately per tier, one tab each.

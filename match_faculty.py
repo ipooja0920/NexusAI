@@ -50,7 +50,8 @@ from nexus.groups import build_groups, pick_listed
 from nexus.organisation import academic_partners, organisation_type, parent_company
 from nexus.prefilter import (company_embedding_text, company_profile_text,
                              embed_text, is_stub_description, rank_by_similarity,
-                             select_candidates)
+                             rank_by_weighted_queries, select_candidates)
+from nexus import publications as pubs_mod
 from nexus.scoring import (PARTNERSHIP_SYSTEM_PROMPT, normalize, score_alignment,
                            score_secondary, write_justification)
 from nexus.settings import Settings
@@ -572,8 +573,18 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
       Mid ($100m-$1bn) and Large ($1bn+): few enough to AI-score them all
     Each tier gets its own top 40 (partnership) and top 20."""
     n = len(companies)
-    profile = build_research_profile(fac)
+    # what the researcher wrote (registration form) - embedded for the
+    # pre-filter; the AI also reads their top publications after it
+    base_profile = build_research_profile(fac)
+    pub_cfg = pubs_mod.settings(cfg.raw)
+    pubs = pubs_mod.find_publications(cfg.path("publications", pub_cfg["dir"]),
+                                      fac["name"], pub_cfg)
+    block = pubs_mod.profile_block(pubs, int(pub_cfg["prompt_titles"]))
+    profile = f"{base_profile}\n{block}" if block else base_profile
     print(f"\n{'='*60}\nFaculty: {fac['name']}  ({fac.get('department')})")
+    if pubs:
+        print(f"  [publications] {len(pubs)} titles (top {min(len(pubs), int(pub_cfg['prompt_titles']))}"
+              " given to the AI)")
     print(f"Profile: {profile[:160]}{'...' if len(profile) > 160 else ''}")
     texts = [company_text(c) for c in companies]
     sectors = [sector_match(c.get("industry"), fac) for c in companies]
@@ -612,12 +623,20 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         # a company with no description can never be scored - it gets no seat
         in_small = {gi for gi in small if texts[gi]}
         ranked_by = []                      # (label, picks per round, ranked list)
-        for label, text in prefilter_queries(fac, profile):
+        for label, text in prefilter_queries(fac, base_profile):
             vec = embed_text(client, cfg.openai["embedding_model"], text, caches)
             q_sims = rank_by_similarity(vec, company_vecs)
             if label == "profile":
                 sims = q_sims
             ranked_by.append((label, [gi for gi in select_candidates(q_sims, 0) if gi in in_small]))
+        if pubs:
+            # each title on its own, weighted by age and type: a company's
+            # best weighted match with any one title
+            t_vecs = [embed_text(client, cfg.openai["embedding_model"], p["title"], caches)
+                      for p in pubs]
+            p_sims = rank_by_weighted_queries(t_vecs, [p["weight"] for p in pubs], company_vecs)
+            ranked_by.append(("publications",
+                              [gi for gi in select_candidates(p_sims, 0) if gi in in_small]))
         cand_a, found_by = combine_searches(ranked_by, top_n,
                                             int(cfg.prefilter.get("extra_per_search", 30)))
         counts = {}
@@ -832,6 +851,11 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
 
     run_info = {
         "research_profile": profile,
+        "publications": (f"{len(pubs)} title{'s' if len(pubs) != 1 else ''} (weighted by age and type; the top "
+                         f"{min(len(pubs), int(pub_cfg['prompt_titles']))} are in the profile above); "
+                         f"the publications search added "
+                         f"{sum(1 for v in found_by.values() if v == 'publications')} small companies"
+                         if pubs else "none found"),
         "faculty_source": (f"Registration form, row {fac['row']}"
                            if fac.get("source") == "registration" else "Faculty Database"),
         "scoring_model": cfg.openai["scoring_model"],

@@ -424,6 +424,24 @@ score can be set (`funnel.min_alignment`, off by default).
   description (one without can never be scored). `Found By` in All
   Companies says which search brought a company in.
 
+**Faculty publications** (`data/input/publications/*.csv`, the scholarly
+contributions export; matched to the faculty by `Name`; only Name, Title,
+Type and Year are read - never NetID or Description). Each title gets a
+weight = age x type: last 5 years (or no year - forthcoming) 1.0, 6-10 years
+0.6, 11-15 years 0.4, older 0.25; articles, letters, reviews 1.0, posters /
+presentations 0.5, errata left out; a title listed twice counts once
+(`publications` in config.yaml). They are used twice:
+- **pre-filter**: each title is searched on its own; a company's score is its
+  best weighted match with any title, and this search adds up to 30 small
+  companies (`Found By` = "publications"). The 300 from the registration
+  profile are unchanged - the titles are not mixed into that search.
+- **AI profile**: the top 12 titles by weight are added after the
+  registration answers, labelled as supporting evidence (the keywords and
+  description come first). Justifications may name one; the grounding check
+  accepts only titles that are in that list.
+Run Info shows how many titles were used and how many companies the search
+added. A faculty member with no publications file is matched as before.
+
 **No outside knowledge.** Every AI step is told to use only the text it is
 given and nothing it may "know" about a company:
 - company profile: only the Capital IQ description and SBIR / trial / OpenAlex text

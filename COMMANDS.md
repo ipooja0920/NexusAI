@@ -296,3 +296,11 @@ git add -A
 git commit -m "your message"
 git push origin main
 ```
+
+
+## Faculty publications (optional)
+
+Put a faculty member's scholarly contributions export (CSV with Name, Title,
+Type, Year) in `data/input/publications/`. The next match run for that
+faculty picks it up by name - nothing else to run. Run Info shows the titles
+used. Weights are under `publications:` in config.yaml.

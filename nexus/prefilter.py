@@ -84,6 +84,26 @@ def rank_by_similarity(profile_vector: Sequence[float],
     return sims
 
 
+def rank_by_weighted_queries(query_vectors, weights, company_vectors) -> List[float]:
+    """For several queries with weights (a researcher's publication titles):
+    each company's best weighted cosine similarity with any one query.
+    Companies with no embedding get -1."""
+    q = [(np.asarray(v, dtype=np.float32), float(w)) for v, w in zip(query_vectors, weights)
+         if v is not None and w > 0]
+    if not q:
+        return [-1.0] * len(company_vectors)
+    dim = len(q[0][0])
+    Q = np.stack([v / (np.linalg.norm(v) or 1.0) for v, _ in q])          # titles x dim
+    W = np.asarray([w for _, w in q], dtype=np.float32)
+    have = [i for i, v in enumerate(company_vectors) if v is not None]
+    out = np.full(len(company_vectors), -1.0, dtype=np.float32)
+    if have:
+        M = np.asarray([company_vectors[i] for i in have], dtype=np.float32).reshape(len(have), dim)
+        M = M / np.maximum(np.linalg.norm(M, axis=1, keepdims=True), 1e-12)
+        out[have] = ((M @ Q.T) * W).max(axis=1)
+    return out.tolist()
+
+
 def select_candidates(similarities: List[float], top_n: int) -> List[int]:
     """Indices of the top-N companies by similarity. top_n <= 0 -> all."""
     order = sorted(range(len(similarities)), key=lambda i: similarities[i], reverse=True)
