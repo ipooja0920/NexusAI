@@ -99,7 +99,23 @@ class Settings:
 
     # ---------- sections ----------
     @property
-    def capitaliq(self) -> dict: return self.raw["capitaliq"]
+    def capitaliq(self) -> dict:
+        """Capital IQ column letters, found by HEADER NAME in the export, so
+        the columns can come in any order; the letters in config.yaml are
+        only the fallback for a column that is not found."""
+        if getattr(self, "_ciq", None) is None:
+            ciq = dict(self.raw["capitaliq"])
+            try:
+                from nexus.capitaliq_layout import read_header, resolve
+                headers = read_header(self.companies_raw, ciq.get("header_row", 8))
+                ciq, moved = resolve(headers, ciq)
+                if moved:
+                    print("  [Capital IQ] columns found by name: " + ", ".join(
+                        f"{k.replace('col_', '')} {new}" for k, (_, new) in moved.items()))
+            except Exception:
+                pass                    # no export yet - the config letters stand
+            self._ciq = ciq
+        return self._ciq
 
     @property
     def faculty(self) -> dict: return self.raw["faculty"]

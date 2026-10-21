@@ -250,7 +250,8 @@ step has refreshed a cache.
 
 ```bash
 # 1. save as real .xlsx, put in data/input/companies_raw.xlsx
-# 2. check the columns against config.yaml (letters, and that they are filled):
+# 2. check every needed column is there and filled (any order works -
+#    columns are found by header name):
 python check_export.py
 python run_tests.py
 ./run_enrich.sh

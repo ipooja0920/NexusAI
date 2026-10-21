@@ -32,6 +32,8 @@ paths:
 capitaliq:
   header_row: 8         # row with column headers ("Company Name", ...)
   data_start_row: 9     # first data row
+  # Columns are found BY HEADER NAME in the export, so any order works; the
+  # letters below are only used if a header is not found.
   col_company: A
   col_ticker: B         # "NasdaqCM:ACET"; blank for private companies
   col_industry: C       # "Industry Classifications"

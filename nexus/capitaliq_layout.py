@@ -5,7 +5,8 @@ columns, and the pipeline addresses them BY LETTER.
   problems(headers, ciq)      header row vs config: missing / moved columns
   fill_warnings(df, ciq)      columns that exist but are (nearly) empty -
                               e.g. "Revenues [LTM]" instead of "Total Revenue"
-  report(path, ciq)           both, plus where each wanted column actually is
+  resolve(headers, ciq)       the letters found by header name - columns may
+                              come in any order (Settings.capitaliq uses this)
 
 Run it on its own:  python check_export.py
 """
@@ -56,13 +57,52 @@ def problems(headers: List[str], ciq: dict) -> List[str]:
     return out
 
 
+# the best header first: Capital IQ offers several revenue and employee
+# items, and only these are well filled for private companies
+PREFER = {
+    "col_revenue": ["total revenue [ltm]", "total revenue", "revenue"],
+    "col_employees": ["total employees", "employees"],
+}
+
+
 def where(headers: List[str]) -> dict:
     """config key -> the letter where its column actually is (or None)."""
     found = {}
     for key, (words, _, _) in EXPECTED.items():
-        found[key] = next((get_column_letter(i + 1) for i, h in enumerate(headers)
-                           if words in _h(h)), None)
+        found[key] = None
+        for w in PREFER.get(key, [words]):
+            hit = next((get_column_letter(i + 1) for i, h in enumerate(headers)
+                        if w in _h(h)), None)
+            if hit:
+                found[key] = hit
+                break
     return found
+
+
+def resolve(headers: List[str], ciq: dict) -> tuple:
+    """Column letters found BY HEADER NAME, so a re-ordered export needs no
+    config change. -> (letters, {key: (config letter, letter used)}). A
+    column that cannot be found keeps its config letter (and check_or_exit
+    names it)."""
+    found = where(headers)
+    out, moved = dict(ciq), {}
+    for key in EXPECTED:
+        if found[key] and found[key] != ciq.get(key):
+            moved[key] = (ciq.get(key), found[key])
+            out[key] = found[key]
+    return out, moved
+
+
+def read_header(path, header_row: int) -> List[str]:
+    """The header row of an .xlsx, quickly (read-only, one row)."""
+    from openpyxl import load_workbook
+    wb = load_workbook(path, read_only=True)
+    try:
+        row = next(wb.worksheets[0].iter_rows(min_row=int(header_row),
+                                              max_row=int(header_row), values_only=True))
+        return ["" if v is None else str(v) for v in row]
+    finally:
+        wb.close()
 
 
 def fill_warnings(df: pd.DataFrame, ciq: dict) -> List[str]:
