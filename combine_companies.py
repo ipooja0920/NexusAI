@@ -167,6 +167,7 @@ from openpyxl.utils import column_index_from_string
 from nexus.matching import (name_parts, same_name,
                             normalise_company_name, state_code,
                             website_domain, zip5, zip_from_address)
+from nexus.capitaliq_layout import check_or_exit, fill_warnings
 from nexus.organisation import academic_partners
 from nexus.settings import Settings
 
@@ -289,6 +290,9 @@ def read_raw(cfg) -> tuple:
     df = pd.read_excel(cfg.companies_raw, header=int(ciq["header_row"]) - 1,
                        dtype=str)
     cols = list(df.columns)
+    check_or_exit([str(c) for c in cols], ciq, cfg.companies_raw)
+    for w in fill_warnings(df, ciq):
+        print(f"  WARNING: {w}")
 
     def col(letter_key):
         return cols[column_index_from_string(str(ciq[letter_key])) - 1]

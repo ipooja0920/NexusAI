@@ -46,6 +46,7 @@ from nexus.cache import Caches, _text_key
 from nexus.company_profile import build_profiles, cache_key, has_sources, source_text
 from nexus.excel_io import write_enriched
 from nexus.funding import company_academic_adjustment, company_funding_score
+from nexus.capitaliq_layout import check_or_exit
 from nexus.organisation import organisation_type, parent_company
 from nexus.geo import Geocoder, clean_address_block, distance_miles, select_address_block
 from nexus.prefilter import company_embedding_text, company_profile_text, embed_text
@@ -95,6 +96,7 @@ def capitaliq_names(cfg) -> dict:
     ciq = cfg.capitaliq
     hdr = list(pd.read_excel(cfg.companies_raw, header=int(ciq["header_row"]) - 1,
                              nrows=0).columns)
+    check_or_exit([str(h) for h in hdr], ciq, cfg.companies_raw)
     fields = {"company": "col_company", "website": "col_website",
               "address": "col_address", "description": "col_description",
               "employees": "col_employees", "revenue": "col_revenue",

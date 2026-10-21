@@ -250,7 +250,8 @@ step has refreshed a cache.
 
 ```bash
 # 1. save as real .xlsx, put in data/input/companies_raw.xlsx
-# 2. check column letters against config.yaml
+# 2. check the columns against config.yaml (letters, and that they are filled):
+python check_export.py
 python run_tests.py
 ./run_enrich.sh
 ```
