@@ -155,17 +155,23 @@ are cached.
 ./run_enrich.sh
 ```
 
-Prints a PID and a log path, then hands you back the prompt:
+Starts the job in the background (it keeps running if you close Terminal or
+the screen sleeps) and shows its progress live, with a rough time left:
 
 ```
   started    PID 4821
-  log        logs/enrich_20260916_215746.log
+  log        logs/enrich_20261021_215746.log
+  ...
+  [1200/18543] processed (14m 05s elapsed - about 3h 23m left; 1,050 addresses looked up, 1,104 embedded so far)
+```
 
-  watch it   tail -f logs/enrich_20260916_215746.log
-  check it   kill -0 4821 && echo running || echo finished
-  stop it    kill 4821
+**Ctrl-C only stops the watching — the job carries on.** Later:
 
-  Safe to close this window. Keep the lid open.
+```bash
+./run_enrich.sh --watch      # show the live progress again
+./run_enrich.sh --status     # one line: running or not, and the last progress
+./run_enrich.sh --stop       # stop the job
+./run_enrich.sh --no-watch   # start it and get the prompt back straight away
 ```
 
 You can close Terminal, quit Terminal, or log out. **Keep the lid open** —

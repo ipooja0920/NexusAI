@@ -89,6 +89,20 @@ FOCUS_TITLES = 3          # newest SBIR project titles in research_focus
 FOCUS_MAX = 1500          # characters
 
 
+
+def _clock(seconds: float) -> str:
+    s = int(seconds)
+    h, m = divmod(s // 60, 60)
+    return f"{h}h {m:02d}m" if h else f"{m}m {s % 60:02d}s" if m else f"{s}s"
+
+
+def eta(done: int, total: int, elapsed: float) -> str:
+    """' - about 1h 20m left', from the pace so far (rough: cached rows are
+    quick, new ones slow)."""
+    if not done or done >= total or elapsed < 5:
+        return ""
+    return f" - about {_clock(elapsed / done * (total - done))} left"
+
 def capitaliq_names(cfg) -> dict:
     """field -> Capital IQ header text, from the column letters in config.
     The combined file keeps Capital IQ's own headers, so the letters are
@@ -190,7 +204,8 @@ def main() -> int:
 
         def progress(done, total):
             if done % 100 == 0 or done == total:
-                print(f"  [profiles] {done}/{total} written ({time.time()-tp:.0f}s)")
+                print(f"  [profiles] {done}/{total} written ({time.time()-tp:.0f}s"
+                      f"{eta(done, total, time.time() - tp)})")
                 if done % 500 == 0:
                     caches.profiles.save()
         profiles = build_profiles(client, model, jobs, caches,
@@ -282,8 +297,10 @@ def main() -> int:
 
         records.append(record)
         done = i + 1
-        if done % 250 == 0 or done == n:
-            print(f"  [{done}/{n}] processed ({time.time()-t0:.0f}s elapsed)")
+        if done % 100 == 0 or done == n:
+            print(f"  [{done}/{n}] processed ({_clock(time.time()-t0)} elapsed"
+                  f"{eta(done, n, time.time() - t0)}; {stats.get('geocoded', 0):,} addresses "
+                  f"looked up, {stats.get('embedded', 0):,} embedded so far)")
         if done % 2500 == 0:
             # periodic save so an interrupt loses little. Not every 250 rows:
             # embeddings.json is several hundred MB and each save rewrites it

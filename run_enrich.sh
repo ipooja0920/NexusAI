@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 #
-# Rebuild the combined file, then run Stage 0 enrichment detached, so the
-# Terminal window can be closed once it says "started".
+# Rebuild the combined file, then run Stage 0 enrichment detached (it keeps
+# running if the Terminal window closes or the screen sleeps), and show its
+# progress live in this window.
 #
-#   ./run_enrich.sh                    # normal run
+#   ./run_enrich.sh                    # normal run, progress shown live
+#   ./run_enrich.sh --no-watch         # start it and return to the prompt
 #   ./run_enrich.sh --skip-embeddings  # any enrich_companies.py flag works
+#   ./run_enrich.sh --watch            # show the progress of a running job again
+#   ./run_enrich.sh --status           # one line: running or finished, last progress
 #   ./run_enrich.sh --stop             # stop a run in progress
+#
+# Ctrl-C while watching only stops the WATCHING - the job carries on.
 #
 # The LID still has to stay open. Closing it sleeps the Mac and pauses the
 # job until you open it again - no command can override that. Plug in an
@@ -31,6 +37,45 @@ PIDFILE="$LOG_DIR/enrich.pid"
 running() {
   [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
 }
+
+latest_log() { ls -t "$LOG_DIR"/enrich_*.log 2>/dev/null | head -1; }
+
+# Follow the log until the job ends. Ctrl-C ends only the watching: the job
+# was started with nohup in the background, so the interrupt never reaches it.
+watch_job() {
+  local pid="$1" log="$2"
+  echo "  watching   $log   (Ctrl-C stops watching; the job keeps running)"
+  echo
+  tail -n 20 -f "$log" &
+  local tp=$!
+  trap 'kill $tp 2>/dev/null; echo; echo "  Stopped watching - enrichment is still running."; echo "  Watch again:  ./run_enrich.sh --watch"; exit 0' INT
+  while kill -0 "$pid" 2>/dev/null; do sleep 2; done
+  sleep 1
+  kill $tp 2>/dev/null || true
+  trap - INT
+  echo
+  if grep -q "^Done in" "$log"; then
+    echo "  Finished.  $(grep '^Done in' "$log" | tail -1)"
+  else
+    echo "  The job ended without 'Done' - see the end of $log"
+  fi
+}
+
+if [ "${1:-}" = "--watch" ]; then
+  if running; then watch_job "$(cat "$PIDFILE")" "$(latest_log)"
+  else
+    echo "Nothing is running. Last log: $(latest_log)"
+    tail -n 5 "$(latest_log)" 2>/dev/null || true
+  fi
+  exit 0
+fi
+
+if [ "${1:-}" = "--status" ]; then
+  L=$(latest_log)
+  if running; then echo "  running (PID $(cat "$PIDFILE"))"; else echo "  not running"; fi
+  [ -n "$L" ] && echo "  $(grep -E '\]|Done in' "$L" | tail -1)" && echo "  log: $L"
+  exit 0
+fi
 
 if [ "${1:-}" = "--stop" ]; then
   if running; then
@@ -76,6 +121,13 @@ if ! "$PY" -c "import pandas, openpyxl" 2>/dev/null; then
   exit 1
 fi
 
+# our own flag; everything else goes to enrich_companies.py
+WATCH=1
+ARGS=()
+for a in "$@"; do
+  if [ "$a" = "--no-watch" ]; then WATCH=0; else ARGS+=("$a"); fi
+done
+
 LOG="$LOG_DIR/enrich_$(date +%Y%m%d_%H%M%S).log"
 
 # Enrichment reads companies_combined.xlsx, so rebuild it first from the
@@ -90,7 +142,7 @@ grep -E "written|matched" "$LOG_DIR/combine_last.log" | sed 's/^/  /' | tail -6
 
 # -u so the log fills live; python buffers stdout when it is not a terminal,
 # which makes tail -f look frozen for minutes at a time.
-nohup "$PY" -u enrich_companies.py "$@" > "$LOG" 2>&1 &
+nohup "$PY" -u enrich_companies.py ${ARGS[@]+"${ARGS[@]}"} > "$LOG" 2>&1 &
 PID=$!
 echo "$PID" > "$PIDFILE"
 
@@ -104,10 +156,10 @@ fi
 echo
 echo "  started    PID $PID"
 echo "  log        $LOG"
-echo
-echo "  watch it   tail -f $LOG"
-echo "  check it   kill -0 $PID 2>/dev/null && echo running || echo finished"
+echo "  watch it   ./run_enrich.sh --watch      status   ./run_enrich.sh --status"
 echo "  stop it    ./run_enrich.sh --stop"
+echo "  It keeps running if you close this window or the screen sleeps. Keep the lid open."
 echo
-echo "  Safe to close this window. Keep the lid open."
-echo
+if [ "$WATCH" = "1" ]; then
+  watch_job "$PID" "$LOG"
+fi
