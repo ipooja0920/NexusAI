@@ -245,9 +245,9 @@ class TestVerdictFirstOrder(unittest.TestCase):
     overall score (Axsome, alignment 4, was #11 in Leighton Core's Mid tab
     above Strong fits that are far away)."""
 
-    def _co(self, name, dist):
-        return {"company": name, "distance_score": dist, "employee_score": 0.1,
-                "revenue_score": 0.5, "organisation_type": "Company"}
+    def _co(self, name, dist, size):
+        return {"company": name, "distance_score": dist, "employee_score": size,
+                "revenue_score": size, "organisation_type": "Company"}
 
     def test_strong_before_weak_whatever_the_overall(self):
         from match_faculty import fit_band
@@ -256,9 +256,9 @@ class TestVerdictFirstOrder(unittest.TestCase):
         cfg = Settings()
         cfg.raw["funnel"]["final_top_n"] = 2
         caches = Caches(Path(tempfile.mkdtemp()))
-        # the weak one is next door, the strong ones far away
-        cs = [self._co("Near Weak", 1.0), self._co("Far Strong", 0.0),
-              self._co("Mid Moderate", 0.3)]
+        # the weak one is next door and large, the strong one far away and small
+        cs = [self._co("Near Weak", 1.0, 1.0), self._co("Far Strong", 0.0, 0.0),
+              self._co("Mid Moderate", 0.3, 0.5)]
         align = {0: {"score": "4", "reason": ""}, 1: {"score": "8", "reason": ""},
                  2: {"score": "5", "reason": ""}}
         partner = {i: {"score": "9", "reason": ""} for i in range(3)}
