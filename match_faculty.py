@@ -338,6 +338,18 @@ def listing_key(align, overall):
     return lambda gi: (fit_band((align.get(gi) or {}).get("score")), -overall[gi])
 
 
+VERDICTS = ("Strong fit", "Moderate fit", "Weak fit", "Fit unclear")
+_LEADING_VERDICT = re.compile(
+    r"^\s*\**\s*(strong fit|moderate fit|weak fit|fit unclear)\s*\**\s*[:\-\u2013\u2014.]?\s*", re.I)
+
+
+def with_verdict(text: str, score) -> str:
+    """The justification starting with exactly the verdict its alignment
+    score gives - the AI's own label, right or wrong, is replaced."""
+    body = _LEADING_VERDICT.sub("", (text or "").strip(), count=1)
+    return f"{verdict(score)}: {body}"
+
+
 def run_pass(candidate_idx, companies, texts, align, partner, cfg, caches, client,
              min_align=None, groups=None):
     w = cfg.weights
@@ -503,8 +515,7 @@ def justifications(indices, companies, texts, sectors, profile, align, partner,
         # from the data instead
         if not text:
             return plain_justification(companies[gi], align[gi], funding[gi])
-        v = verdict(align[gi]["score"])
-        return text if text.lower().startswith(v.lower()) else f"{v}: {text}"
+        return with_verdict(text, align[gi]["score"])
 
     out = {}
     with ThreadPoolExecutor(max_workers=int(cfg.openai.get("concurrency", 16))) as pool:

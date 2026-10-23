@@ -32,6 +32,16 @@ SUITES = [
     ("OpenAlex ties fetch", "tests.test_fetch_openalex_ties"),
     ("OpenAlex cleaning", "tests.test_clean_openalex"),
     ("OpenAlex combine", "tests.test_openalex_combine"),
+    ("SBIR no-UEI grouping", "tests.test_sbir_grouping"),
+    ("Capital IQ export layout", "tests.test_capitaliq_layout"),
+    ("Company profiles (AI)", "tests.test_company_profile"),
+    ("Faculty registration form", "tests.test_faculty_registration"),
+    ("Faculty publications", "tests.test_publications"),
+    ("Grounding (no hallucination)", "tests.test_grounding"),
+    ("Alignment votes", "tests.test_alignment_votes"),
+    ("Verdicts in justifications", "tests.test_verdicts"),
+    ("Review fixes", "tests.test_match_fixes"),
+    ("QA fixes", "tests.test_qa_fixes"),
     ("End-to-end pipeline", "tests.test_pipeline"),
 ]
 

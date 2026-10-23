@@ -24,7 +24,7 @@ cp .env.example .env
 Check it worked:
 
 ```bash
-python run_tests.py          # 404 tests, ~10 seconds, no API key or network needed
+python run_tests.py          # 502 tests, ~20 seconds, no API key or network needed
 ```
 
 After this you do **not** need `source venv/bin/activate` for `./run_enrich.sh` —
