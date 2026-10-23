@@ -326,6 +326,18 @@ def verdict(score) -> str:
     return "Strong fit" if v >= 7 else "Moderate fit" if v >= 5 else "Weak fit"
 
 
+def fit_band(score) -> int:
+    """0 Strong fit (7-9), 1 Moderate (5-6), 2 Weak (1-4), 3 unclear (NA) -
+    tabs list every Strong fit before any Moderate one, and so on."""
+    v = to_num(score)
+    return 3 if v is None else 0 if v >= 7 else 1 if v >= 5 else 2
+
+
+def listing_key(align, overall):
+    """Sort key for a tab: verdict first, then overall score (best first)."""
+    return lambda gi: (fit_band((align.get(gi) or {}).get("score")), -overall[gi])
+
+
 def run_pass(candidate_idx, companies, texts, align, partner, cfg, caches, client,
              min_align=None, groups=None):
     w = cfg.weights
@@ -386,12 +398,16 @@ def run_pass(candidate_idx, companies, texts, align, partner, cfg, caches, clien
     final_n = cfg.funnel["final_top_n"]
     groups = groups if groups is not None else [None] * n
     # one member per corporate group (parent and subsidiaries listed once)
-    comp_order = sorted(comp, key=overall.get, reverse=True)
-    prov_order = sorted(prov, key=overall.get, reverse=True)
+    # verdict first (every Strong fit before any Moderate, then Weak), then
+    # overall score - so a weak research match never outranks a strong one
+    # because it is nearby or rich
+    order_key = listing_key(align, overall)
+    comp_order = sorted(comp, key=order_key)
+    prov_order = sorted(prov, key=order_key)
     final_comp, gave_way = pick_listed(comp_order, groups, final_n)
     final_prov, gave_way_p = pick_listed(prov_order, groups, final_n)
     gave_way.update(gave_way_p)
-    final = sorted(final_comp + final_prov, key=overall.get, reverse=True)
+    final = sorted(final_comp + final_prov, key=order_key)
     return {"candidates": list(candidate_idx), "prelim": prelim, "secondary": top_secondary,
             "eligible": set(eligible), "funding": funding, "academic": academic,
             "overall": overall, "final": final,
@@ -428,7 +444,7 @@ def dedupe_across_tiers(widest, groups, align, final_n) -> None:
             p["final_companies"] = fc
             p["gave_way"] = {**gw, **{k: v for k, v in p["gave_way"].items()
                                       if k in set(p["prov_order"])}}
-            p["final"] = sorted(fc + p["final_providers"], key=p["overall"].get, reverse=True)
+            p["final"] = sorted(fc + p["final_providers"], key=listing_key(align, p["overall"]))
 
 
 # ----------------------------------------------------------------------
@@ -715,8 +731,10 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
     # ---------- Justifications for every listed company ----------
     finals = list(dict.fromkeys(gi for t in TIERS if t in widest for gi in widest[t][1]["final"]))
     # providers beyond the combined sheet's top N are not listed - no justification
-    prov_all = sorted(((widest[t][1]["overall"][gi], gi) for t in TIERS if t in widest
-                       for gi in widest[t][1]["final_providers"]), reverse=True)
+    prov_overall = {gi: widest[t][1]["overall"][gi] for t in TIERS if t in widest
+                    for gi in widest[t][1]["final_providers"]}
+    prov_all = [(prov_overall[gi], gi) for gi in sorted(prov_overall,
+                                                        key=listing_key(align, prov_overall))]
     prov_listed, prov_gave_way = pick_listed([gi for _, gi in prov_all], groups, final_n)
     unlisted = {gi for _, gi in prov_all} - set(prov_listed)
     finals = [gi for gi in finals if gi not in unlisted]
@@ -811,13 +829,14 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         return "Filtered out (pre-filter)"
 
     def tier_order(p):
-        """Ranking of every scored company in a tier: the listed ones by overall
-        score, then the rest of the partnership-scored ones by overall score,
+        """Ranking of every scored company in a tier: the listed ones (verdict
+        first, then overall score), then the rest of the partnership-scored
+        ones in the same order,
         then every other company with a 1-9 alignment score by preliminary
         score. Companies with no score (NA, no description) are not ranked."""
         listed = list(p["final"])
         rest_sec = sorted((g for g in p["secondary"] if g not in set(listed)),
-                          key=lambda g: p["overall"][g], reverse=True)
+                          key=listing_key(align, p["overall"]))
         seen = set(listed) | set(rest_sec)
         scored = [g for g in p["candidates"]
                   if g not in seen and to_num(align.get(g, {}).get("score")) is not None]
