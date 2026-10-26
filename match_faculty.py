@@ -121,12 +121,15 @@ def to_num(score_str):
 
 def combine_votes(votes) -> dict:
     """One alignment answer from several asks of the same question: the
-    middle score (the lower middle for an even count), so one odd answer is
-    outvoted. NA only when most answers are NA. The reason is the one given
-    with the middle score; `votes` lists every answer, e.g. "8, 4, 7"."""
+    middle of the numeric answers (the lower middle for an even count), so
+    one odd answer is outvoted. NA only when EVERY answer is NA - for an
+    unrelated company the model sometimes says "no information" instead of
+    1-2, and the numeric answer it gave once is the better one. The reason
+    is the one given with the middle score; `votes` lists every answer,
+    e.g. "8, 4, 7"."""
     nums = sorted(to_num(v["score"]) for v in votes if to_num(v["score"]) is not None)
     shown = ", ".join(str(v["score"]) for v in votes)
-    if not nums or len(nums) * 2 < len(votes):
+    if not nums:
         na = next((v for v in votes if to_num(v["score"]) is None), votes[0])
         return {"score": "NA", "reason": na["reason"], "votes": shown}
     mid = nums[(len(nums) - 1) // 2]

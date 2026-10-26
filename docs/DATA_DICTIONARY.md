@@ -396,7 +396,7 @@ score can be set (`funnel.min_alignment`, off by default).
 - **Alignment is asked 3 times per company** (`openai.alignment_votes`) and
   the middle score is used - one ask can swing by several points (8 one run,
   4 the next). `Alignment Votes` shows all three answers (e.g. "8, 4, 7");
-  the reason shown is the one given with the middle score. Each answer is
+  the reason shown is the one given with the middle score. A company is NA only when all three answers are NA; otherwise NA answers are ignored. Each answer is
   cached on its own, so re-runs cost nothing extra.
 - **Alignment 1-2 means no named link.** A company whose description names
   none of the researcher's methods, tools, conditions, body parts or patient

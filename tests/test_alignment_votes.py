@@ -35,7 +35,12 @@ class TestCombineVotes(unittest.TestCase):
         self.assertEqual(combine_votes([v(8), v(5)])["score"], "5")
 
     def test_na(self):
-        self.assertEqual(combine_votes([v("NA"), v("NA"), v(6)])["score"], "NA")
+        # NA only when every answer is NA
+        self.assertEqual(combine_votes([v("NA"), v("NA"), v("NA")])["score"], "NA")
+        # otherwise the middle of the numeric answers (Ley Cody Smith's run:
+        # unrelated electronics companies answered "1, NA, NA")
+        r = combine_votes([v(1), v("NA"), v("NA")])
+        self.assertEqual((r["score"], r["reason"], r["votes"]), ("1", "r1", "1, NA, NA"))
         self.assertEqual(combine_votes([v("NA"), v(6), v(8)])["score"], "6")
         self.assertEqual(combine_votes([v(9)])["score"], "9")
 

@@ -20,7 +20,7 @@ NEW = ["Company Name", "Exchange:Ticker", "Industry Classifications", "Company T
 class TestLayout(unittest.TestCase):
 
     def setUp(self):
-        self.ciq = Settings().capitaliq
+        self.ciq = Settings().raw["capitaliq"]   # config letters, not the export on disk
 
     def test_good_export(self):
         self.assertEqual(problems(GOOD, self.ciq), [])
