@@ -335,6 +335,7 @@ def write_faculty_output(path: Path, faculty: dict, tabs, run_info: dict,
         ("Faculty source", run_info.get("faculty_source")),
         ("Secondary scoring cutoff", run_info.get("secondary_cutoff")),
         ("Weights", run_info.get("weights")),
+        ("Tab order", run_info.get("tab_order")),
     ]
     for k, v in rows:
         info.append([k, str(v) if v is not None else ""])

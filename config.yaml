@@ -112,6 +112,13 @@ funnel:
   # (gene editing, oncology) fill their tabs.
   min_alignment: 0
   min_alignment_by_tier: {Small: 0, Mid: 4, Large: 4}
+  # how each tab is ordered (and which 50 are listed):
+  #   overall        - by overall score: a weaker research fit with strong
+  #                    relationship potential (near, partners with
+  #                    universities, money) can rank above a stronger fit
+  #   verdict_first  - every Strong fit, then Moderate, then Weak, each by
+  #                    overall score
+  tab_order: overall
   # an NA partnership answer ("not known") counts as this, after the 1-9
   # scores are scaled to 0-1 - neutral, not the lowest score
   partnership_missing: 0.5

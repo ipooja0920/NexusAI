@@ -255,6 +255,7 @@ class TestVerdictFirstOrder(unittest.TestCase):
                          [0, 0, 1, 1, 2, 2, 3])
         cfg = Settings()
         cfg.raw["funnel"]["final_top_n"] = 2
+        cfg.raw["funnel"]["tab_order"] = "verdict_first"
         caches = Caches(Path(tempfile.mkdtemp()))
         # the weak one is next door and large, the strong one far away and small
         cs = [self._co("Near Weak", 1.0, 1.0), self._co("Far Strong", 0.0, 0.0),
@@ -266,3 +267,57 @@ class TestVerdictFirstOrder(unittest.TestCase):
         self.assertGreater(p["overall"][0], p["overall"][1])     # weak has the higher overall
         self.assertEqual(p["final_companies"], [1, 2])             # but strong, moderate are listed
         self.assertEqual(p["comp_order"], [1, 2, 0])
+
+
+class TestTabOrderSwitch(unittest.TestCase):
+    """funnel.tab_order: 'overall' (the default - the faculty reviewer's
+    choice: a weaker fit with strong relationship potential may rank higher)
+    or 'verdict_first'."""
+
+    def _run(self, mode):
+        cfg = Settings()
+        cfg.raw["funnel"]["final_top_n"] = 2
+        if mode is not None:
+            cfg.raw["funnel"]["tab_order"] = mode
+        caches = Caches(Path(tempfile.mkdtemp()))
+        co = lambda n, d, s: {"company": n, "distance_score": d, "employee_score": s,
+                              "revenue_score": s, "organisation_type": "Company"}
+        cs = [co("Near Weak", 1.0, 1.0), co("Far Strong", 0.0, 0.0), co("Mid Moderate", 0.3, 0.5)]
+        align = {0: {"score": "4", "reason": ""}, 1: {"score": "8", "reason": ""},
+                 2: {"score": "5", "reason": ""}}
+        partner = {i: {"score": "9", "reason": ""} for i in range(3)}
+        return run_pass([0, 1, 2], cs, ["t"] * 3, align, partner, cfg, caches, client=None)
+
+    def test_default_is_overall(self):
+        from match_faculty import tab_order
+        self.assertEqual(tab_order(Settings()), "overall")      # config.yaml
+        cfg = Settings()
+        cfg.raw["funnel"].pop("tab_order", None)
+        self.assertEqual(tab_order(cfg), "overall")             # an older config
+        p = self._run(None)
+        o = p["overall"]
+        self.assertEqual(p["comp_order"], sorted([0, 1, 2], key=lambda i: -o[i]))
+        self.assertEqual(p["final_companies"][0], 0)            # the weak, well-placed one first
+
+    def test_verdict_first(self):
+        p = self._run("verdict_first")
+        self.assertEqual(p["final_companies"], [1, 2])
+
+    def test_bad_value_stops_with_a_message(self):
+        with self.assertRaises(SystemExit) as e:
+            self._run("by_name")
+        self.assertIn("overall, verdict_first", str(e.exception))
+
+    def test_run_info_says_which(self):
+        install_fake_openai()
+        p = TempProject()
+        p.__enter__()
+        try:
+            p.seed_geocodes()
+            p.run_enrich()
+            self.assertEqual(p.run_match(["--faculty", "Ioulia Valla"]), 0)
+            info = {r[0]: r[1] for r in openpyxl.load_workbook(p.outputs()[0])["Run Info"]
+                    .iter_rows(values_only=True)}
+            self.assertTrue(str(info["Tab order"]).startswith("overall score"))
+        finally:
+            p.__exit__()

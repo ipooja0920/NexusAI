@@ -362,7 +362,7 @@ one sheet of their own. Workbook tabs:
 
 In each tier: companies and care providers each send their top 100 (by
 preliminary score: distance, size, alignment) to the partnership step; the top
-50 companies - verdict first, then overall score - fill the tier tab, and the providers' best go to
+50 companies (in `funnel.tab_order`: by overall score, or verdict first) fill the tier tab, and the providers' best go to
 the Hospitals & Clinics sheet (top 50 across all sizes). A minimum alignment
 score can be set (`funnel.min_alignment`, off by default).
 
@@ -411,11 +411,12 @@ score can be set (`funnel.min_alignment`, off by default).
   member with the higher alignment stays (a tie goes to the larger tier). The
   others show "Same group as X (listed)" in All Companies, and the tab fills
   the place with its next company.
-- **Tabs are ordered by verdict first**: every Strong fit (alignment 7-9),
-  then Moderate (5-6), then Weak (1-4), each group by overall score. The top
-  50 are taken in that order too, so a weak research match never outranks a
-  strong one just because it is near Storrs or large. (Overall Score is
-  unchanged and still shown.)
+- **Tab order** (`funnel.tab_order`, shown in Run Info): `overall` (default)
+  ranks by Overall Score, so a weaker research fit with strong relationship
+  potential - near Storrs, university track record, money - can rank above a
+  stronger fit (the verdict in the justification says which it is);
+  `verdict_first` lists every Strong fit, then Moderate, then Weak, each by
+  overall score. The top 50 are taken in the same order.
 - **Justifications start with the verdict**: "Strong fit" (alignment 7-9),
   "Moderate fit" (5-6), "Weak fit" (1-4) or "Fit unclear" (NA).
 - A partnership answer of **NA** ("not known") counts as **neutral (0.5)** after
