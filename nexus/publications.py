@@ -57,7 +57,8 @@ def _norm(s) -> str:
 
 
 def _key(name) -> str:
-    return re.sub(r"[^a-z0-9]", "", _norm(name).lower())
+    from nexus.faculty_registration import name_key
+    return name_key(name)
 
 
 def _year(v) -> Optional[int]:

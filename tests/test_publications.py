@@ -147,3 +147,38 @@ class TestInARun(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAccentedNames(unittest.TestCase):
+    """The registration form says 'Cristina Colón-Semenza', her publications
+    export 'Cristina Colon-Semenza' - the same person."""
+
+    def test_name_key(self):
+        from nexus.faculty_registration import name_key
+        self.assertEqual(name_key("Cristina Colón-Semenza"), name_key("cristina  colon semenza"))
+        self.assertEqual(name_key("Cristina Colón-Semenza"), "cristinacolonsemenza")
+        self.assertNotEqual(name_key("Na Li"), name_key("Na Zhang"))
+
+    def test_publications_found_without_the_accent(self):
+        d = Path(tempfile.mkdtemp())
+        write(d / "c.csv", [row("Cristina Colon-Semenza", "Telerehabilitation in Parkinson disease",
+                                year="2026")])
+        p = find_publications(d, "Cristina Colón-Semenza", settings({}), today=2026)
+        self.assertEqual([x["title"] for x in p], ["Telerehabilitation in Parkinson disease"])
+
+    def test_faculty_flag_without_the_accent(self):
+        import argparse
+        from match_faculty import pick_faculty
+        install_fake_openai()
+        p = TempProject()
+        p.__enter__()
+        try:
+            p.write_registration([{"name": "Cristina Colón-Semenza",
+                                   "keywords": "Parkinson disease, physical activity"}])
+            cfg = p.settings()
+            args = argparse.Namespace(row=None, faculty="Cristina Colon-Semenza")
+            todo, err = pick_faculty(args, cfg)
+            self.assertIsNone(err)
+            self.assertEqual(todo[0]["name"], "Cristina Colón-Semenza")
+        finally:
+            p.__exit__()

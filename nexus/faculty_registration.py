@@ -13,6 +13,7 @@ faculty is row 2 ("row 13" = the 12th faculty).
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 from typing import List
 
@@ -35,6 +36,14 @@ FIELDS = {
     "notes": "Is there anything else about your research",
 }
 EXACT = {"name", "department"}      # short headers: must match exactly
+
+
+def name_key(name) -> str:
+    """A person's name for matching: accents, case, spaces and punctuation
+    ignored - "Cristina Colón-Semenza" = "cristina colon semenza"."""
+    s = unicodedata.normalize("NFKD", "" if name is None else str(name))
+    s = "".join(ch for ch in s if not unicodedata.combining(ch)).lower()
+    return re.sub(r"[^a-z0-9]", "", s)
 
 
 def _norm(s: str) -> str:

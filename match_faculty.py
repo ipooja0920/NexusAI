@@ -43,7 +43,7 @@ from nexus import scoring
 from nexus.cache import Caches
 from nexus.excel_io import (read_enriched, read_faculty, set_faculty_flag,
                             unique_path, write_faculty_output)
-from nexus.faculty_registration import (read_registration, research_profile,
+from nexus.faculty_registration import (name_key, read_registration, research_profile,
                                         sector_match)
 from nexus.funding import _yes, company_academic_adjustment, company_funding_score
 from nexus.groups import build_groups, pick_listed
@@ -955,14 +955,14 @@ def pick_faculty(args, cfg):
                         + ", ".join(f"{f['row']} {f['name']}" for f in reg))
         return todo, None
     if args.faculty:
-        target = " ".join(args.faculty.split()).lower()
+        target = name_key(args.faculty)
         pools = []
         if reg_path.exists():
             pools.append(read_registration(reg_path))
         if cfg.faculty_database.exists():
             pools.append(read_faculty(cfg.faculty_database, cfg.faculty))
         for pool in pools:
-            todo = [f for f in pool if " ".join(f["name"].split()).lower() == target]
+            todo = [f for f in pool if name_key(f["name"]) == target]
             if todo:
                 return todo[:1], None
         names = [f["name"] for pool in pools for f in pool]
