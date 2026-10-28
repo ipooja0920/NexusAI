@@ -182,3 +182,48 @@ class TestAccentedNames(unittest.TestCase):
             self.assertEqual(todo[0]["name"], "Cristina Colón-Semenza")
         finally:
             p.__exit__()
+
+
+class TestMiddleNames(unittest.TestCase):
+    """Registration 'Mary Anne Amalaradjou', publications export 'Mary
+    Amalaradjou', and typed 'Mary Anne Roshni Amalaradjou': the same person."""
+
+    def test_same_person(self):
+        from nexus.faculty_registration import first_last, same_person
+        self.assertEqual(first_last("Dr. Mary Anne Roshni Amalaradjou"), "mary amalaradjou")
+        self.assertTrue(same_person("Mary Anne Amalaradjou", "Mary Amalaradjou"))
+        self.assertTrue(same_person("Mary Anne Roshni Amalaradjou", "Mary Anne Amalaradjou"))
+        self.assertTrue(same_person("Cristina Colón-Semenza", "cristina colon semenza"))
+        self.assertFalse(same_person("Na Li", "Na Zhang"))
+        self.assertFalse(same_person("Kun Chen", "Kun"))          # one word is not enough
+
+    def test_publications_with_a_middle_name(self):
+        d = Path(tempfile.mkdtemp())
+        write(d / "m.csv", [row("Mary Amalaradjou", "Probiotics for poultry health", year="2025")])
+        p = find_publications(d, "Mary Anne Amalaradjou", settings({}), today=2026)
+        self.assertEqual([x["title"] for x in p], ["Probiotics for poultry health"])
+
+    def test_faculty_flag_with_extra_names_and_ambiguity(self):
+        import argparse
+        from match_faculty import pick_faculty
+        install_fake_openai()
+        p = TempProject()
+        p.__enter__()
+        try:
+            p.write_registration([{"name": "Mary Anne Amalaradjou", "keywords": "food safety"},
+                                  {"name": "Sam Lee", "keywords": "x"},
+                                  {"name": "Sam J. Lee", "keywords": "y"}])
+            cfg = p.settings()
+            todo, err = pick_faculty(argparse.Namespace(
+                row=None, faculty="Mary Anne Roshni Amalaradjou"), cfg)
+            self.assertIsNone(err)
+            self.assertEqual(todo[0]["name"], "Mary Anne Amalaradjou")
+            # an exact name still wins over the first+last fallback
+            todo, err = pick_faculty(argparse.Namespace(row=None, faculty="Sam Lee"), cfg)
+            self.assertEqual(todo[0]["name"], "Sam Lee")
+            # two first+last matches: ask for the row
+            todo, err = pick_faculty(argparse.Namespace(row=None, faculty="Sam Q Lee"), cfg)
+            self.assertEqual(todo, [])
+            self.assertIn("use --row", err)
+        finally:
+            p.__exit__()

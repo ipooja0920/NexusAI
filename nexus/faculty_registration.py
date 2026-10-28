@@ -46,6 +46,32 @@ def name_key(name) -> str:
     return re.sub(r"[^a-z0-9]", "", s)
 
 
+_TITLES = {"dr", "prof", "professor", "mr", "mrs", "ms", "phd", "md"}
+
+
+def _name_words(name) -> list:
+    s = unicodedata.normalize("NFKD", "" if name is None else str(name))
+    s = "".join(ch for ch in s if not unicodedata.combining(ch)).lower()
+    return [w for w in re.findall(r"[a-z0-9]+", s) if w not in _TITLES]
+
+
+def first_last(name) -> str:
+    """'mary amalaradjou' from 'Dr. Mary Anne Roshni Amalaradjou' - first and
+    last name only, for when one source has middle names and the other not."""
+    w = _name_words(name)
+    return f"{w[0]} {w[-1]}" if len(w) >= 2 else " ".join(w)
+
+
+def same_person(a, b) -> bool:
+    """Same full name (accents, case, punctuation ignored), or - if not - the
+    same first and last name: the registration form says 'Mary Anne
+    Amalaradjou', her publications export 'Mary Amalaradjou'."""
+    if name_key(a) and name_key(a) == name_key(b):
+        return True
+    fa, fb = first_last(a), first_last(b)
+    return bool(fa) and " " in fa and fa == fb
+
+
 def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", str(s)).strip().lower()
 

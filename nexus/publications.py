@@ -98,10 +98,10 @@ def read_publications(path: Path, faculty_name: str, s: dict,
     need = [c for c in ("name", "title") if c not in cols]
     if need:
         raise ValueError(f"{Path(path).name}: no {', '.join(need)} column")
-    want = _key(faculty_name)
+    from nexus.faculty_registration import same_person
     best = {}
     for _, r in df.iterrows():
-        if _key(r[cols["name"]]) != want:
+        if not same_person(r[cols["name"]], faculty_name):
             continue
         title = _norm(r[cols["title"]]).rstrip(".")
         if not title:

@@ -44,6 +44,7 @@ from nexus.cache import Caches
 from nexus.excel_io import (read_enriched, read_faculty, set_faculty_flag,
                             unique_path, write_faculty_output)
 from nexus.faculty_registration import (name_key, read_registration, research_profile,
+                                        same_person,
                                         sector_match)
 from nexus.funding import _yes, company_academic_adjustment, company_funding_score
 from nexus.groups import build_groups, pick_listed
@@ -962,7 +963,15 @@ def pick_faculty(args, cfg):
         if cfg.faculty_database.exists():
             pools.append(read_faculty(cfg.faculty_database, cfg.faculty))
         for pool in pools:
+            # the full name first; then first + last name only (middle names
+            # differ between sources: 'Mary Anne Roshni Amalaradjou')
             todo = [f for f in pool if name_key(f["name"]) == target]
+            if not todo:
+                todo = [f for f in pool if same_person(f["name"], args.faculty)]
+                if len(todo) > 1:
+                    return [], (f"'{args.faculty}' matches more than one faculty: "
+                                + ", ".join(f"{f['row']} {f['name']}" for f in todo)
+                                + " - use --row N")
             if todo:
                 return todo[:1], None
         names = [f["name"] for pool in pools for f in pool]
