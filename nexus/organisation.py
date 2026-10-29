@@ -76,6 +76,12 @@ _VET = re.compile(
     r"veterinar\w* (?:partners|medicine facilit\w*|telehealth)|veterinarians?|dvms?|"
     r"animal health care services|care for pets|animal\b[\w &,]{0,40}\bhospital|"
     r"pet (?:care|hospital|clinic)|vet (?:clinic|hospital|care)|televet\w*)\b", re.I)
+# ...but one that SELLS veterinary products ("provides high quality veterinary
+# diagnostic products to veterinarians") is an animal-health company
+_VET_PRODUCTS = re.compile(
+    r"\b(veterinar\w* (?:\w+ ){0,2}(?:products|diagnostics? (?:kits|tests|products)|"
+    r"vaccines?|pharmaceuticals?|drugs|medicines|biologics|supplies|devices|"
+    r"instruments|equipment|kits|reagents|test kits)|animal health products)\b", re.I)
 _PARENT = re.compile(
     r"\boperates as (?:a |an )?(?:wholly[- ]owned )?subsidiary of\s+([^.;]+?)\s*(?:\.(?:\s|$)|;|$)",
     re.I)
@@ -100,7 +106,7 @@ def organisation_type(name, description) -> str:
         return COMPANY
     # an animal hospital is a veterinary clinic, not a health system
     if _VET.search(name) or _VET.search(opening):
-        return CLINIC
+        return COMPANY if _VET_PRODUCTS.search(opening) else CLINIC
     if _HOSP_NAME.search(name) or _HOSP_DESC.search(opening) or _HOSP_DBA.search(opening):
         return HOSPITAL
     if _CLIN_DESC.search(opening) or _CLIN_NAME.search(name):

@@ -42,6 +42,7 @@ SUITES = [
     ("Verdicts in justifications", "tests.test_verdicts"),
     ("Review fixes", "tests.test_match_fixes"),
     ("QA fixes", "tests.test_qa_fixes"),
+    ("Batch QA fixes (voice, parents, website, vet)", "tests.test_batch_fixes"),
     ("End-to-end pipeline", "tests.test_pipeline"),
 ]
 

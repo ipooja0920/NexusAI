@@ -48,12 +48,24 @@ _LEGAL = {"inc", "incorporated", "llc", "ltd", "limited", "corp", "corporation",
           "company", "the", "lp", "llp"}
 
 
+# European / other legal forms, dropped only at the END of a name: "Lonza
+# Group Ltd" and "Lonza Group AG" are one parent, but "SA Recycling" keeps
+# its "SA". KGaA is not here: "Merck KGaA" is not "Merck & Co.".
+_LEGAL_END = {"ag", "aktiengesellschaft", "se", "plc", "nv", "sa", "bv", "gmbh", "spa", "srl", "sarl",
+              "oyj", "ab", "asa", "as", "kk", "pty"}
+
+
 def parent_key(name) -> str:
     """Stricter than group_key, for matching a parent's name: only the
-    ticker, punctuation and the commonest legal forms go, so "Merck & Co."
-    and "Merck KGaA" (two different companies) stay apart."""
+    ticker, punctuation and legal forms go, so "Merck & Co." and "Merck
+    KGaA" (two different companies) stay apart, while "Lonza Group Ltd"
+    and "Lonza Group AG (SWX:LONN)" match."""
     s = _BRACKET.sub(" ", "" if name is None else str(name)).lower()
-    return " ".join(w for w in re.findall(r"[a-z0-9]+", s) if w not in _LEGAL)
+    s = re.sub(r"\b([a-z])[./]([a-z])\b\.?", r"\1\2", s)      # S.A. / N.V. / A/S
+    words = [w for w in re.findall(r"[a-z0-9]+", s) if w not in _LEGAL]
+    while len(words) > 1 and words[-1] in _LEGAL_END:
+        words.pop()
+    return " ".join(words)
 
 
 def build_groups(companies: List[dict]) -> List[Optional[int]]:

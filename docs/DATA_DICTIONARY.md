@@ -419,6 +419,19 @@ score can be set (`funnel.min_alignment`, off by default).
   overall score. The top 50 are taken in the same order.
 - **Justifications start with the verdict**: "Strong fit" (alignment 7-9),
   "Moderate fit" (5-6), "Weak fit" (1-4) or "Fit unclear" (NA).
+- **Justifications speak about the researcher** ("the researcher", "you"), never
+  as them ("my work"), even when the registration text is in the first person.
+  An answer written as the researcher is sent back once; if it still is, the
+  plain data-only justification is used.
+- **No website on record**: the justification ends "Note: Capital IQ has no
+  website for this company - check it still operates before reaching out."
+  Old records (CoreTek, bought in 2000) can still say "Operating".
+- **Corporate groups**: parent names are compared without legal forms, including
+  AG / SE / plc / NV / SA at the end ("Lonza Group Ltd" = "Lonza Group AG");
+  KGaA is kept, so Merck KGaA and Merck & Co. stay apart.
+- **Veterinary**: an animal hospital or vet practice is a Clinic / care provider;
+  a company that sells veterinary products (diagnostics, vaccines, drugs) is a
+  Company.
 - A partnership answer of **NA** ("not known") counts as **neutral (0.5)** after
   the 1–9 scores are scaled — not as the lowest score. The partnership prompt
   is given the company's university record (SBIR and trial university

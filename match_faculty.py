@@ -526,6 +526,24 @@ def plain_justification(c: dict, align: dict, funding: tuple) -> str:
             f"{_fmt(c.get('distance_miles'), ' miles')}.")
 
 
+_NO_SITE = {"", "-", "--", "n/a", "na", "nan", "none", "null"}
+NO_WEBSITE_NOTE = ("Note: Capital IQ has no website for this company - check it "
+                   "still operates before reaching out.")
+
+
+def has_website(c: dict) -> bool:
+    return str(c.get("website") or "").strip().lower() not in _NO_SITE
+
+
+def with_website_note(text: str, c: dict) -> str:
+    """Old Capital IQ records (CoreTek, bought in 2000; Copley, 1999) still
+    say "Operating" but have no website: the justification says to check
+    the company still exists. A warning only - nothing is removed."""
+    if has_website(c) or NO_WEBSITE_NOTE in text:
+        return text
+    return f"{text.rstrip()} {NO_WEBSITE_NOTE}"
+
+
 def justifications(indices, companies, texts, sectors, profile, align, partner,
                    funding, academic, cfg, client) -> dict:
     model = cfg.openai["scoring_model"]
@@ -538,8 +556,10 @@ def justifications(indices, companies, texts, sectors, profile, align, partner,
         # the AI failed or kept adding things not in our data: write it plainly
         # from the data instead
         if not text:
-            return plain_justification(companies[gi], align[gi], funding[gi])
-        return with_verdict(text, align[gi]["score"])
+            text = plain_justification(companies[gi], align[gi], funding[gi])
+        else:
+            text = with_verdict(text, align[gi]["score"])
+        return with_website_note(text, companies[gi])
 
     out = {}
     with ThreadPoolExecutor(max_workers=int(cfg.openai.get("concurrency", 16))) as pool:

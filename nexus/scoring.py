@@ -247,6 +247,9 @@ JUSTIFICATION_SYSTEM_PROMPT = (
     "- If the FACTS say no university track record or no funding record, say that - "
     "do not guess.\n"
     "- Do not name any people. If the overlap is weak, say so plainly.\n\n"
+    "VOICE: write about the researcher as \"the researcher\" or \"you\"/\"your\". "
+    "Never write as the researcher - no \"I\", \"my\", \"me\", \"we\" or \"our\" - "
+    "even when the researcher's profile is written in the first person.\n\n"
     'Return ONLY valid JSON: {"justification": string}.'
 )
 
@@ -285,13 +288,28 @@ def ungrounded(text: str, source: str) -> list:
     return bad
 
 
+# "I" as a numeral is not first person: Phase I, Type I, "oxLink I and II" ...
+_FIRST_PERSON = re.compile(
+    r"(?<!Phase )(?<!Type )(?<!Class )(?<!Stage )(?<!Tier )(?<!Part )(?<!Grade )"
+    r"(?<!Level )(?<!Series )\bI\b(?!-)(?!\s*(?:and|or|,|/|&)\s*II\b)|\b[Mm]y\b|\b[Mm]yself\b|\b[Mm]ine\b|\bme\b|"
+    r"\b[Ww]e\b|\b[Oo]ur\b|\b[Oo]urs\b|\bus\b")
+
+
+def first_person(text: str) -> list:
+    """First-person words in a justification ("my research", "I develop"):
+    the justification speaks about the researcher, never as them."""
+    return _FIRST_PERSON.findall(text or "")
+
+
 def write_justification(client, model: str, research_profile: str, company: str,
                         facts: str, max_retries: int = 3) -> Optional[str]:
     """2-3 sentences on why this company matches this researcher, built only
     from the facts given. Each answer is checked: a figure or a university
     name that is not in the researcher profile or the facts sends it back
     once with the problem named; if it still invents, None is returned and
-    the caller writes a plain justification from the data instead."""
+    the caller writes a plain justification from the data instead. The
+    same one rewrite is used for an answer written as the researcher
+    ("my work"); if it is still in the first person, None as well."""
     base = (f"Researcher:\n{research_profile}\n\nCompany: {company}\nFACTS:\n"
             f"{facts}\n\nRespond with JSON only.")
     source = f"{research_profile}\n{company}\n{facts}"
@@ -302,14 +320,22 @@ def write_justification(client, model: str, research_profile: str, company: str,
             text = str(json.loads(raw).get("justification", "")).strip()
             if text:
                 bad = ungrounded(text, source)
-                if not bad:
+                voice = first_person(text)
+                if not bad and not voice:
                     return text
                 if rewrites >= 1:
                     return None
                 rewrites += 1
-                user_prompt = (base + "\n\nYour previous answer mentioned things that are "
-                               f"not in the FACTS: {', '.join(bad)}. Rewrite it using only "
-                               "the FACTS.")
+                problems = []
+                if bad:
+                    problems.append("it mentioned things that are not in the FACTS: "
+                                    f"{', '.join(bad)} - use only the FACTS")
+                if voice:
+                    problems.append("it was written as the researcher (" +
+                                    ", ".join(sorted(set(voice))) + ") - write about "
+                                    "the researcher as \"the researcher\" or \"you\"")
+                user_prompt = (base + "\n\nRewrite your previous answer: "
+                               + "; ".join(problems) + ".")
                 continue
         except Exception:
             pass
