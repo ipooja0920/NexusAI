@@ -333,9 +333,11 @@ in the file is matched exactly as before. Names are matched like `--faculty`
     - HIV stigma
 ```
 
-- **leads**: the lead's whole corporate group is shown on a "Researcher's
-  leads" sheet (first sheet), AI-scored with a justification that includes
-  the note. A lead missing from this run's company list is taken from the
+- **leads**: the companies named like the lead (or, when none is, the ones
+  naming it as their parent) are shown on a "Researcher's leads" sheet
+  (first sheet). The note is read by the AI with the company profile, for
+  the alignment score and the justification. Companies the lead acquired
+  are not treated as the lead. A lead missing from this run's company list is taken from the
   lists under `faculty_notes: lead_sources:` in config.yaml (the all-US
   datasets). Its description is also searched for similar companies
   ("like lead: ..." in All Companies → Found By).

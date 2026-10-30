@@ -492,7 +492,8 @@ Only for a faculty member listed in the file (see COMMANDS.md):
 
 | Where | What changes |
 |---|---|
-| "Researcher's leads" sheet (first) | Every company of each named lead's corporate group, AI-scored, by alignment. Overall Score is filled only when the company was also ranked in a size tab |
+| "Researcher's leads" sheet (first) | The companies NAMED like each lead (or, if none, the ones naming it as parent), AI-scored, by alignment. Companies the lead acquired are not on it (counted in Run Info). Overall Score is filled only when the company was also ranked in a size tab |
+| Company Profile / Alignment | For a lead, the profile ends "Note from the researcher about this company: ..." - the AI scores the lead with what the researcher told us |
 | Distance Score | Leads: 1.0 (distance not counted). With `distance_full_score_miles: N`: 1.0 up to N miles, then exp(-(miles - N) / distance_decay) |
 | Research profile used | Ends with "Further notes from the researcher: ..." when `extra_research` is set |
 | Justification | For a lead: may say the researcher named it, and use the researcher's note |

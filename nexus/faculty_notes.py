@@ -10,10 +10,12 @@ who is can have any of:
   distance_full_score_miles: companies up to this far get the full distance
                    score; past it the usual decline starts from there
   leads:           companies the researcher named. Each is always AI-scored
-                   and shown on a "Researcher's leads" sheet, with its whole
-                   corporate group; distance does not count against it; the
-                   note (if any) is given to the justification; and its
-                   description is searched for similar companies.
+                   and shown on a "Researcher's leads" sheet; distance does
+                   not count against it; the note (if any) is read by the AI
+                   with the company profile - for the alignment score and
+                   the justification; and its description is searched for
+                   similar companies. Companies the lead acquired are not
+                   treated as the lead.
 
     "Jane Doe":
       extra_research: |
@@ -147,14 +149,38 @@ def matches_lead(company: dict, lead: str) -> bool:
 
 
 def lead_members(lead: str, companies: List[dict], groups: List[Optional[int]]) -> List[int]:
-    """Every company of the lead's corporate group in this list."""
-    hits = {i for i, c in enumerate(companies) if matches_lead(c, lead)}
-    group_ids = {groups[i] for i in hits if groups[i] is not None}
-    hits |= {i for i, g in enumerate(groups) if g is not None and g in group_ids}
-    return sorted(hits)
+    """The lead itself: companies NAMED like the lead ("Jazz Pharmaceuticals
+    plc", "Jazz Pharmaceuticals (EUSA Pharma USA) Inc."). Only when no
+    company carries the name, the ones that name it as their parent
+    ("Greenwich Biosciences, Inc." - subsidiary of GW Pharmaceuticals plc).
+    Plus records of the same company under a second name form ("Greenwich
+    Biosciences, Llc"). Companies the lead merely acquired (Chimerix,
+    Celator - parent Jazz) are NOT the lead: see related_members."""
+    want = _words(lead)
+    if not want:
+        return []
+    named = {i for i, c in enumerate(companies) if _words(c.get("company"))[:len(want)] == want}
+    if not named:
+        named = {i for i, c in enumerate(companies) if matches_lead(c, lead)}
+    # the same company under a second legal form; one-word names are too
+    # common to tie on
+    keys = {k for k in (group_key(companies[i].get("company")) for i in named)
+            if len(k.split()) >= 2}
+    named |= {i for i, c in enumerate(companies) if group_key(c.get("company")) in keys}
+    return sorted(named)
 
 
-def summary(entry: dict, found: Dict[str, List[str]], extra_from: Dict[str, str]) -> str:
+def related_members(core: List[int], groups: List[Optional[int]]) -> List[int]:
+    """The rest of the lead's corporate group (acquired companies,
+    subsidiaries under other names) - counted in Run Info, not treated as
+    the lead."""
+    ids = {groups[i] for i in core if groups[i] is not None}
+    core = set(core)
+    return [i for i, g in enumerate(groups) if g is not None and g in ids and i not in core]
+
+
+def summary(entry: dict, found: Dict[str, List[str]], extra_from: Dict[str, str],
+            related: Optional[Dict[str, int]] = None) -> str:
     """One line for Run Info: what was customised for this faculty."""
     parts = []
     if entry.get("extra_research"):
@@ -167,7 +193,11 @@ def summary(entry: dict, found: Dict[str, List[str]], extra_from: Dict[str, str]
     for lead, note in leads_of(entry):
         names = found.get(lead) or []
         src = f" (from {extra_from[lead]})" if lead in extra_from else ""
+        rel = (related or {}).get(lead, 0)
+        rel_txt = (f"; {rel} other compan{'y' if rel == 1 else 'ies'} of its corporate group "
+                   "(e.g. acquired) not treated as the lead" if rel else "")
         parts.append(f"lead '{lead}': " + (f"{len(names)} compan{'y' if len(names) == 1 else 'ies'}"
-                                          f"{src} - distance not counted"
+                                          f"{src} - distance not counted, note given to the AI"
+                                          f"{rel_txt}"
                                           if names else "not found in any company list"))
     return "; ".join(parts) if parts else "entry present, nothing set"

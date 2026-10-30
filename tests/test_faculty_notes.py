@@ -61,7 +61,18 @@ class TestUnits(unittest.TestCase):
                {"company": "Jazzy Foods LLC", "parent_company": None},
                {"company": "Acme Pharma", "parent_company": None}]
         from nexus.groups import build_groups
-        self.assertEqual(fn.lead_members("Jazz Pharmaceuticals", cos, build_groups(cos)), [0, 1, 2])
+        g = build_groups(cos)
+        # the lead is the companies NAMED like it; Greenwich (parent Jazz) is
+        # in its group but not the lead
+        self.assertEqual(fn.lead_members("Jazz Pharmaceuticals", cos, g), [0, 1])
+        self.assertEqual(fn.related_members([0, 1], g), [2])
+
+    def test_lead_by_parent_when_no_name_matches(self):
+        cos = [{"company": "Greenwich Biosciences, Inc.", "parent_company": "GW Pharmaceuticals plc"},
+               {"company": "Greenwich Biosciences, Llc", "parent_company": None},
+               {"company": "Chimerix, Inc.", "parent_company": "Jazz Pharmaceuticals plc"}]
+        from nexus.groups import build_groups
+        self.assertEqual(fn.lead_members("GW Pharmaceuticals", cos, build_groups(cos)), [0, 1])
 
     def test_ignore_publications(self):
         terms = fn.ignore_terms({"ignore_publications": ["HIV", "Stigma"]})
@@ -109,9 +120,13 @@ class TestEndToEnd(unittest.TestCase):
         prompts = []
         orig = FakeOpenAI._Chat.create
 
+        align_prompts = []
+
         def create(self_, model, messages):
             if "justification" in messages[0]["content"].lower():
                 prompts.append(messages[-1]["content"])
+            elif "how well companies align" in messages[0]["content"].lower():
+                align_prompts.append(messages[-1]["content"])
             return orig(self_, model, messages)
 
         FakeOpenAI._Chat.create = create
@@ -133,7 +148,14 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual([r[hdr.index("Company")] for r in lead[1:]], ["Pyro Energy Inc."])
         self.assertEqual(lead[1][hdr.index("Distance Score")], 1.0)
         self.assertTrue(lead[1][hdr.index("Justification")])
-        self.assertTrue(any("Their note: Met them at a conference in June." in t for t in prompts))
+        lead_j = [t for t in prompts if "Company: Pyro Energy Inc." in t]
+        self.assertTrue(lead_j and all("Met them at a conference in June." in t for t in lead_j))
+        self.assertTrue(all(t.count("Met them at a conference in June.") == 1 for t in lead_j))
+        lead_a = [t for t in align_prompts if "Pyro Energy Inc." in t]
+        self.assertTrue(lead_a and any("Note from the researcher about this company: Met them"
+                                       in t for t in lead_a))
+        others = [t for t in align_prompts + prompts if "Pyro Energy Inc." not in t]
+        self.assertFalse(any("Met them at a conference" in t for t in others))
         info = {r[0]: r[1] for r in wb["Run Info"].iter_rows(values_only=True)}
         self.assertIn("Further notes from the researcher: Interested in catalyst", 
                       info["Research profile used"])
@@ -145,6 +167,7 @@ class TestEndToEnd(unittest.TestCase):
         self.assertTrue(dist and all(d == 1.0 for d in dist), dist)   # all within 400 miles
         found = {r[h.index("Company")]: r[h.index("Found By")] for r in allc[1:]}
         self.assertIn("like lead: Pyro Energy", set(found.values()))
+        self.assertEqual(found["Pyro Energy Inc."], "researcher's lead")
 
     def test_lead_from_other_list(self):
         with TempProject() as p:

@@ -516,7 +516,8 @@ def facts_for(gi, c, text, sector, align, partner, funding, academic, note=None)
         f"Distance from UConn Storrs: {_fmt(c.get('distance_miles'), ' miles')}",
         f"Revenue: {_fmt(c.get('revenue_usdmm'))} $USDmm; employees: {_fmt(c.get('employees'))}",
     ] + ([("The researcher named this company as a lead, so distance is not counted "
-            "against it." + (f" Their note: {note}" if note.strip() else ""))]
+            "against it." + (f" Their note: {note}"
+                             if note.strip() and note not in (text or "") else ""))]
          if note is not None else []))
 
 
@@ -684,7 +685,9 @@ def resolve_leads(leads, companies, cfg) -> tuple:
                     groups = build_groups(companies)
                     break
         found[lead] = idx
-    return companies, found, came_from
+    groups = build_groups(companies)
+    related = {lead: len(notes_mod.related_members(idx, groups)) for lead, idx in found.items()}
+    return companies, found, came_from, related
 
 
 def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, client,
@@ -700,11 +703,11 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
     entry = notes_mod.notes_for(
         notes_mod.load_notes(cfg.path("faculty_notes", notes_mod.DEFAULT_PATH)), fac["name"])
     leads = notes_mod.leads_of(entry)
-    lead_found, lead_from, lead_note = {}, {}, {}
+    lead_found, lead_from, lead_note, lead_related = {}, {}, {}, {}
     if entry and (leads or entry.get("distance_full_score_miles") is not None):
         companies = [dict(c) for c in companies]          # changed for this faculty only
     if leads:
-        companies, lead_found, lead_from = resolve_leads(leads, companies, cfg)
+        companies, lead_found, lead_from, lead_related = resolve_leads(leads, companies, cfg)
         for lead, note in leads:
             for gi in lead_found[lead]:
                 lead_note[gi] = note or ""
@@ -809,6 +812,12 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
     else:
         cand_a = list(small)
     pre_label = f"{top_n} pre-filter" if len(cand_a) < len(small) else "all companies"
+    # a named lead is judged with what the researcher told us about it: the
+    # note is read with its profile (Capital IQ says what Jazz sells, not
+    # that it funds medical education on cannabinoids)
+    for gi in lead_set:
+        if texts[gi] and lead_note.get(gi):
+            texts[gi] = f"{texts[gi]}\n\nNote from the researcher about this company: {lead_note[gi]}"
 
     if small:
         print(f"\n  Small - {pre_label}")
@@ -1035,7 +1044,7 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         r["prelim_score"] = w["p"]["prelim"].get(gi) if w else None
         r["stage"] = stage_of(gi, w)
         r["in_prefilter"] = ("Yes" if gi in in_a else "No") if tier[gi] == "Small" else "All scored"
-        r["found_by"] = found_by.get(gi) or (lead_label.get(gi) if gi in lead_set else None)
+        r["found_by"] = lead_label.get(gi) if gi in lead_set else found_by.get(gi)
         r["overall_score"] = w["p"]["overall"].get(gi) if w else None
         if not w or gi not in w["sec"]:
             r["partnership_score"] = r["partnership_reason"] = None
@@ -1064,7 +1073,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         "secondary_cutoff": f"{cutoff} per tab",
         "weights": cfg.weights,
         "faculty_notes": (notes_mod.summary(entry, {lead: [companies[gi]["company"] for gi in idx]
-                                                    for lead, idx in lead_found.items()}, lead_from)
+                                                    for lead, idx in lead_found.items()}, lead_from,
+                                           lead_related)
                           if entry else None),
         "tab_order": ("overall score (a weaker research fit can rank above a stronger one "
                       "when relationship potential is higher)" if tab_order(cfg) == "overall"
