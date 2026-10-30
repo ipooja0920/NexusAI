@@ -44,6 +44,7 @@ SUITES = [
     ("QA fixes", "tests.test_qa_fixes"),
     ("Batch QA fixes (voice, parents, website, vet)", "tests.test_batch_fixes"),
     ("Faculty notes (leads, distance, extra text)", "tests.test_faculty_notes"),
+    ("Shortlist: companies vs clinics", "tests.test_shortlist"),
     ("End-to-end pipeline", "tests.test_pipeline"),
 ]
 

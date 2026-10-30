@@ -84,6 +84,10 @@ prefilter:
   # are searched on their own and ADD up to this many companies each on top
   # of the 300 (the 300 from the full profile are never reduced)
   extra_per_search: 30
+  # hospitals, clinics and practices get their OWN places (they only compete
+  # for the Hospitals & Clinics sheet), so they never take a company's place
+  provider_candidates: 100       # closest by the full profile
+  provider_extra_per_search: 10  # added by each keyword / publications search
   # true = small companies are AI-scored ALL, not just the most similar
   # (hours of AI calls). Default off: the pre-filter keeps every candidate
   # relevant. One run can opt in with --full.

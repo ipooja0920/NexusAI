@@ -616,6 +616,21 @@ def combine_searches(ranked_by: list, top_n: int, extra: int) -> tuple:
     return chosen, found_by
 
 
+def shortlist(ranked_by: list, is_prov, top_n: int, extra: int,
+              prov_n: int, prov_extra: int) -> tuple:
+    """The pre-filter with SEPARATE places for companies and for hospitals,
+    clinics and practices. Providers only compete for the Hospitals & Clinics
+    sheet, so they must not take a company's place: for Cristina
+    Colón-Semenza 243 of 510 places went to PT clinics, and Whoop, ReWalk and
+    Sword Health were never scored. -> (candidates, found_by, n companies,
+    n providers)"""
+    comp = [(label, [g for g in ranked if not is_prov(g)]) for label, ranked in ranked_by]
+    prov = [(label, [g for g in ranked if is_prov(g)]) for label, ranked in ranked_by]
+    chosen_c, by_c = combine_searches(comp, top_n, extra)
+    chosen_p, by_p = combine_searches(prov, prov_n, prov_extra)
+    return chosen_c + chosen_p, {**by_c, **by_p}, len(chosen_c), len(chosen_p)
+
+
 TIERS = ("Small", "Mid", "Large")
 
 
@@ -769,6 +784,7 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
     top_n = cfg.prefilter["top_n_candidates"] if cfg.prefilter["enabled"] else 0
     sims = None
     found_by = {}
+    n_comp = n_prov = None
     if top_n and top_n > 0 and len(small) > top_n:
         company_vecs = [caches.get_embedding(company_embedding_text(c["company"], texts[i]))
                         for i, c in enumerate(companies)]
@@ -802,15 +818,20 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
             p_sims = rank_by_weighted_queries(t_vecs, [p["weight"] for p in pubs], company_vecs)
             ranked_by.append(("publications",
                               [gi for gi in select_candidates(p_sims, 0) if gi in in_small]))
-        cand_a, found_by = combine_searches(ranked_by, top_n,
-                                            int(cfg.prefilter.get("extra_per_search", 30)))
+        cand_a, found_by, n_comp, n_prov = shortlist(
+            ranked_by, lambda gi: is_provider(companies[gi]), top_n,
+            int(cfg.prefilter.get("extra_per_search", 30)),
+            int(cfg.prefilter.get("provider_candidates", 100)),
+            int(cfg.prefilter.get("provider_extra_per_search", 10)))
         counts = {}
         for lab in found_by.values():
             counts[lab] = counts.get(lab, 0) + 1
-        print(f"  [prefilter] {len(small):,} small companies -> {len(cand_a)} candidates "
+        print(f"  [prefilter] {len(small):,} small companies -> {len(cand_a)} candidates: "
+              f"{n_comp} companies + {n_prov} hospitals/clinics "
               f"({', '.join(f'{k}: {v}' for k, v in counts.items())})")
     else:
         cand_a = list(small)
+        n_comp = n_prov = None
     pre_label = f"{top_n} pre-filter" if len(cand_a) < len(small) else "all companies"
     # a named lead is judged with what the researcher told us about it: the
     # note is read with its profile (Capital IQ says what Jazz sells, not
@@ -1067,7 +1088,9 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         "size_tiers": ", ".join(f"{t}: {len(members[t]):,}" for t in TIERS)
                       + f" (Small = under {_money(tiers_cfg['small_below'])} or revenue "
                       f"unknown; Large = {_money(tiers_cfg['large_from'])} and above)",
-        "n_candidates": f"{len(cand_a)} small companies",
+        "n_candidates": (f"{len(cand_a)} small companies: {n_comp} companies + {n_prov} "
+                         "hospitals/clinics (separate places)" if n_comp is not None
+                         else f"{len(cand_a)} small companies"),
         "n_full": "; ".join(f"{tab_title(t, widest[t][0])}: {len(widest[t][1]['candidates']):,}"
                             for t in TIERS if t in widest),
         "secondary_cutoff": f"{cutoff} per tab",

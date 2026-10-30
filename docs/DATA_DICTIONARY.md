@@ -442,6 +442,11 @@ score can be set (`funnel.min_alignment`, off by default).
   (`prefilter.extra_per_search`) - about 450 in all, only companies with a
   description (one without can never be scored). `Found By` in All
   Companies says which search brought a company in.
+  Hospitals, clinics and practices get SEPARATE places - 100 by the full
+  profile plus 10 per extra search (`prefilter.provider_candidates`,
+  `provider_extra_per_search`) - so they never take a company's place; the
+  300 and 30s above are companies only. Run Info "Candidates after
+  pre-filter" shows both counts.
 
 **Faculty publications** (`data/input/publications/*.csv`, the scholarly
 contributions export; matched to the faculty by `Name`; only Name, Title,
