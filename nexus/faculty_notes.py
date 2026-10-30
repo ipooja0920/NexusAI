@@ -200,4 +200,7 @@ def summary(entry: dict, found: Dict[str, List[str]], extra_from: Dict[str, str]
                                           f"{src} - distance not counted, note given to the AI"
                                           f"{rel_txt}"
                                           if names else "not found in any company list"))
+    if leads_of(entry):
+        parts.append("research-fit scores for leads come from the company profile "
+                     "(plus the researcher's note where given)")
     return "; ".join(parts) if parts else "entry present, nothing set"
