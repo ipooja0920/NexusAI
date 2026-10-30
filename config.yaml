@@ -27,6 +27,9 @@ paths:
   # faculty scholarly contributions exports (Name, Title, Type, Year read);
   # one CSV per faculty or several in one file - matched by Name
   publications: data/input/publications
+  # per-faculty adjustments (extra research text, named leads, distance,
+  # publications to ignore) - a faculty member not in it runs as usual
+  faculty_notes: data/input/faculty_notes.yaml
 
 # --------- Capital IQ export layout (same as screening reports) ------
 capitaliq:
@@ -85,6 +88,14 @@ prefilter:
   # (hours of AI calls). Default off: the pre-filter keeps every candidate
   # relevant. One run can opt in with --full.
   full_run: false
+
+# --------- Faculty notes (data/input/faculty_notes.yaml) --------------
+faculty_notes:
+  # a named lead that is not in this run's company list is looked for in
+  # these lists (first one that has it), and added for that faculty only
+  lead_sources:
+    - data/datasets/Pharma Biotech (all US)/companies_enriched.xlsx
+    - data/datasets/Health Care/companies_enriched.xlsx
 
 # --------- Faculty publications ---------------------------------------
 # weight = age weight x type weight; recent work counts most, older still counts

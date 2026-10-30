@@ -486,6 +486,20 @@ per company and profile text, shared by every faculty.
 
 ---
 
+### Faculty notes (`data/input/faculty_notes.yaml`)
+
+Only for a faculty member listed in the file (see COMMANDS.md):
+
+| Where | What changes |
+|---|---|
+| "Researcher's leads" sheet (first) | Every company of each named lead's corporate group, AI-scored, by alignment. Overall Score is filled only when the company was also ranked in a size tab |
+| Distance Score | Leads: 1.0 (distance not counted). With `distance_full_score_miles: N`: 1.0 up to N miles, then exp(-(miles - N) / distance_decay) |
+| Research profile used | Ends with "Further notes from the researcher: ..." when `extra_research` is set |
+| Justification | For a lead: may say the researcher named it, and use the researcher's note |
+| All Companies → Stage | "Researcher's lead (see Researcher's leads sheet)" for a lead not listed in a size tab |
+| All Companies → Found By | "researcher's lead", "researcher's lead (from <dataset>)" for one taken from another list, "like lead: <name>" for a company found by searching with the lead's description |
+| Run Info → Faculty notes used | What was applied; a lead found nowhere says so |
+
 ## Things to remember
 
 - **One row per company - only when known.** Capital IQ lists some companies

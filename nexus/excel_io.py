@@ -337,6 +337,8 @@ def write_faculty_output(path: Path, faculty: dict, tabs, run_info: dict,
         ("Weights", run_info.get("weights")),
         ("Tab order", run_info.get("tab_order")),
     ]
+    if run_info.get("faculty_notes"):          # only for faculty with an entry
+        rows.append(("Faculty notes used", run_info["faculty_notes"]))
     for k, v in rows:
         info.append([k, str(v) if v is not None else ""])
     for cell in info["A"]:

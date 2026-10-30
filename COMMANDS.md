@@ -312,3 +312,32 @@ Put a faculty member's scholarly contributions export (CSV with Name, Title,
 Type, Year) in `data/input/publications/`. The next match run for that
 faculty picks it up by name - nothing else to run. Run Info shows the titles
 used. Weights are under `publications:` in config.yaml.
+
+## Faculty notes (optional, per faculty)
+
+`data/input/faculty_notes.yaml` adjusts ONE faculty member's run. Anyone not
+in the file is matched exactly as before. Names are matched like `--faculty`
+(accents, case and middle names ignored). Every field is optional:
+
+```yaml
+"Jane Doe":
+  extra_research: |
+    Provider education modules on cannabis use in pregnancy; focus group of
+    20 perinatal providers; national survey of 622 women of childbearing age.
+  distance_full_score_miles: 400      # full distance score up to 400 miles
+  leads:                              # always scored; own sheet; distance not counted
+    - name: Jazz Pharmaceuticals
+      note: Interested in her work; offers medical education grants with a cannabinoid section.
+    - GW Pharmaceuticals              # a name alone is fine
+  ignore_publications:                # leave out titles containing these words
+    - HIV stigma
+```
+
+- **leads**: the lead's whole corporate group is shown on a "Researcher's
+  leads" sheet (first sheet), AI-scored with a justification that includes
+  the note. A lead missing from this run's company list is taken from the
+  lists under `faculty_notes: lead_sources:` in config.yaml (the all-US
+  datasets). Its description is also searched for similar companies
+  ("like lead: ..." in All Companies → Found By).
+- Run Info gets a "Faculty notes used" line listing what was applied.
+- A typo in a field name stops the run with a message naming the field.

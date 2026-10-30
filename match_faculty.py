@@ -36,6 +36,7 @@ import argparse
 import re
 import sys
 import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -53,6 +54,7 @@ from nexus.prefilter import (company_embedding_text, company_profile_text,
                              embed_text, is_stub_description, rank_by_similarity,
                              rank_by_weighted_queries, select_candidates)
 from nexus import publications as pubs_mod
+from nexus import faculty_notes as notes_mod
 from nexus.scoring import (PARTNERSHIP_SYSTEM_PROMPT, normalize, score_alignment,
                            score_secondary, write_justification)
 from nexus.settings import Settings
@@ -493,7 +495,7 @@ def _fmt(v, unit=""):
     return f"{v:,.0f}{unit}" if isinstance(v, (int, float)) else f"{v}{unit}"
 
 
-def facts_for(gi, c, text, sector, align, partner, funding, academic) -> str:
+def facts_for(gi, c, text, sector, align, partner, funding, academic, note=None) -> str:
     org = c.get("organisation_type") or "Company"
     status = c.get("company_status")
     parent = c.get("parent_company")
@@ -513,7 +515,9 @@ def facts_for(gi, c, text, sector, align, partner, funding, academic) -> str:
         f"Money available: {funding[1]}",
         f"Distance from UConn Storrs: {_fmt(c.get('distance_miles'), ' miles')}",
         f"Revenue: {_fmt(c.get('revenue_usdmm'))} $USDmm; employees: {_fmt(c.get('employees'))}",
-    ])
+    ] + ([("The researcher named this company as a lead, so distance is not counted "
+            "against it." + (f" Their note: {note}" if note.strip() else ""))]
+         if note is not None else []))
 
 
 def plain_justification(c: dict, align: dict, funding: tuple) -> str:
@@ -545,12 +549,13 @@ def with_website_note(text: str, c: dict) -> str:
 
 
 def justifications(indices, companies, texts, sectors, profile, align, partner,
-                   funding, academic, cfg, client) -> dict:
+                   funding, academic, cfg, client, notes=None) -> dict:
     model = cfg.openai["scoring_model"]
 
     def one(gi):
         facts = facts_for(gi, companies[gi], texts[gi], sectors[gi], align[gi],
-                          partner[gi], funding[gi], academic[gi])
+                          partner[gi], funding[gi], academic[gi],
+                          note=(notes or {}).get(gi))
         text = write_justification(client, model, profile, companies[gi]["company"],
                                    facts, max_retries=cfg.openai["max_retries"])
         # the AI failed or kept adding things not in our data: write it plainly
@@ -635,6 +640,53 @@ def tier_titles(tiers_cfg: dict) -> dict:
     return {"Mid": f"Mid ({_money(lo)}-{_money(hi)})", "Large": f"Large ({_money(hi)}+)"}
 
 
+LEADS_TAB = "Researcher's leads"
+
+
+def lead_sources(cfg) -> list:
+    """(label, path) of the extra company lists searched for a named lead
+    that is not in this run's list (config faculty_notes.lead_sources)."""
+    raw = (cfg.raw.get("faculty_notes") or {}).get("lead_sources") or []
+    out = []
+    for item in raw:
+        p = Path(item)
+        p = p if p.is_absolute() else cfg.config_path.parent / p
+        out.append((p.parent.name or p.stem, p))
+    return out
+
+
+def resolve_leads(leads, companies, cfg) -> tuple:
+    """-> (companies, {lead: [index]}, {lead: list it came from}). A lead not
+    in this run's list is taken - with its corporate group - from the first
+    lead source that has it, and added to THIS faculty's companies only."""
+    groups = build_groups(companies)
+    found, came_from, loaded = {}, {}, None
+    for lead, _ in leads:
+        idx = notes_mod.lead_members(lead, companies, groups)
+        if not idx:
+            if loaded is None:
+                loaded = []
+                for label, path in lead_sources(cfg):
+                    if path.exists():
+                        df = read_enriched(path)
+                        rows = df.where(df.notna(), None).to_dict("records")
+                        prepare_companies(rows)
+                        loaded.append((label, rows, build_groups(rows)))
+            have = {c.get("company") for c in companies}
+            for label, rows, g2 in loaded:
+                hit = [rows[i] for i in notes_mod.lead_members(lead, rows, g2)
+                       if rows[i].get("company") not in have]
+                if hit:
+                    start = len(companies)
+                    companies = companies + [dict(r) for r in hit]
+                    idx = list(range(start, len(companies)))
+                    came_from[lead] = label
+                    groups = build_groups(companies)
+                    break
+        found[lead] = idx
+    return companies, found, came_from
+
+
 def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, client,
                       full: bool = True, sample: int = 0) -> str:
     """One faculty, ranked separately within each company size tier:
@@ -643,13 +695,43 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
           every small company with a description, as a second tab
       Mid ($100m-$1bn) and Large ($1bn+): few enough to AI-score them all
     Each tier gets its own top 40 (partnership) and top 20."""
+    # data/input/faculty_notes.yaml: a faculty member with no entry runs
+    # exactly as before
+    entry = notes_mod.notes_for(
+        notes_mod.load_notes(cfg.path("faculty_notes", notes_mod.DEFAULT_PATH)), fac["name"])
+    leads = notes_mod.leads_of(entry)
+    lead_found, lead_from, lead_note = {}, {}, {}
+    if entry and (leads or entry.get("distance_full_score_miles") is not None):
+        companies = [dict(c) for c in companies]          # changed for this faculty only
+    if leads:
+        companies, lead_found, lead_from = resolve_leads(leads, companies, cfg)
+        for lead, note in leads:
+            for gi in lead_found[lead]:
+                lead_note[gi] = note or ""
+    lead_set = {gi for v in lead_found.values() for gi in v}
+    if entry and entry.get("distance_full_score_miles") is not None:
+        decay = float((cfg.raw.get("components") or {}).get("distance_decay", 400.0))
+        for c in companies:
+            c["distance_score"] = notes_mod.plateau_distance_score(
+                c.get("distance_miles"), decay, entry["distance_full_score_miles"])
+    for gi in lead_set:                                   # a named lead: distance not counted
+        companies[gi]["distance_score"] = 1.0
     n = len(companies)
     # what the researcher wrote (registration form) - embedded for the
     # pre-filter; the AI also reads their top publications after it
     base_profile = build_research_profile(fac)
+    if entry and str(entry.get("extra_research") or "").strip():
+        base_profile += ("\nFurther notes from the researcher: "
+                         + " ".join(str(entry["extra_research"]).split()))
     pub_cfg = pubs_mod.settings(cfg.raw)
     pubs = pubs_mod.find_publications(cfg.path("publications", pub_cfg["dir"]),
                                       fac["name"], pub_cfg)
+    terms = notes_mod.ignore_terms(entry)
+    if terms:
+        kept = [p for p in pubs if notes_mod.keep_publication(p.get("title"), terms)]
+        print(f"  [faculty notes] {len(pubs) - len(kept)} publications left out "
+              f"(title contains: {', '.join(terms)})")
+        pubs = kept
     block = pubs_mod.profile_block(pubs, int(pub_cfg["prompt_titles"]))
     profile = f"{base_profile}\n{block}" if block else base_profile
     print(f"\n{'='*60}\nFaculty: {fac['name']}  ({fac.get('department')})")
@@ -700,6 +782,15 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
             if label == "profile":
                 sims = q_sims
             ranked_by.append((label, [gi for gi in select_candidates(q_sims, 0) if gi in in_small]))
+        for lead, _ in leads:
+            # companies like the lead: its own description as one more search
+            with_vec = [gi for gi in lead_found.get(lead, []) if company_vecs[gi] is not None]
+            if with_vec:
+                best = max(with_vec, key=lambda gi: len(texts[gi] or ""))
+                ranked_by.append((f"like lead: {lead}",
+                                  [gi for gi in select_candidates(
+                                      rank_by_similarity(company_vecs[best], company_vecs), 0)
+                                   if gi in in_small]))
         if pubs:
             # each title on its own, weighted by age and type: a company's
             # best weighted match with any one title
@@ -798,9 +889,19 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
     for _, _, p in passes:
         funding.update(p["funding"])
         academic.update(p["academic"])
-    print(f"\n  [justification] writing {len(finals)} ...")
-    just = justifications(finals, companies, texts, sectors, profile, align, partner,
-                          funding, academic, cfg, client)
+    lead_idx = sorted(lead_set)
+    if lead_idx:
+        print(f"\n  [faculty notes] scoring {len(lead_idx)} lead compan"
+              f"{'y' if len(lead_idx) == 1 else 'ies'}")
+        score_alignments(lead_idx, companies, texts, profile, cfg, caches, client, align)
+        partnership_scores(lead_idx, companies, texts, cfg, caches, client, partner)
+        for gi in lead_idx:
+            funding.setdefault(gi, company_funding_score(companies[gi], cfg.funding))
+            academic.setdefault(gi, company_academic_adjustment(companies[gi], cfg.academic))
+    to_write = list(dict.fromkeys(finals + lead_idx))
+    print(f"\n  [justification] writing {len(to_write)} ...")
+    just = justifications(to_write, companies, texts, sectors, profile, align, partner,
+                          funding, academic, cfg, client, notes=lead_note)
 
     # ---------- Build output ----------
     def row(gi, rank=None):
@@ -830,6 +931,18 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         }
 
     tabs = {}
+    if lead_idx:
+        overall_any = {}
+        for t in widest:
+            overall_any.update(widest[t][1]["overall"])
+        order = sorted(lead_idx, key=lambda gi: (-(to_num(align.get(gi, {}).get("score")) or 0),
+                                                 companies[gi].get("company") or ""))
+        rows = []
+        for rank, gi in enumerate(order, start=1):
+            r = row(gi, rank)
+            r["overall_score"] = overall_any.get(gi)
+            rows.append(r)
+        tabs[LEADS_TAB] = rows
     for t in TIERS:
         if t not in widest:
             continue
@@ -865,6 +978,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         min_align = tier_min_alignment(cfg, tier[gi])
         if gi in excluded:
             return f"Left out ({companies[gi].get('company_status')})"
+        if gi in lead_set and gi not in listed:
+            return f"Researcher's lead (see {LEADS_TAB} sheet)"
         if w is None:
             return "Not scored"
         if gi in listed:
@@ -911,6 +1026,8 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
             return (order, 0, w["order"][gi])
         return (order, 1, gi)
 
+    lead_label = {gi: "researcher's lead" + (f" (from {lead_from[lead]})" if lead in lead_from else "")
+                  for lead, idx in lead_found.items() for gi in idx}
     all_rows = []
     for gi in sorted(range(n), key=sort_key):
         w = info.get(tier[gi])
@@ -918,7 +1035,7 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         r["prelim_score"] = w["p"]["prelim"].get(gi) if w else None
         r["stage"] = stage_of(gi, w)
         r["in_prefilter"] = ("Yes" if gi in in_a else "No") if tier[gi] == "Small" else "All scored"
-        r["found_by"] = found_by.get(gi)
+        r["found_by"] = found_by.get(gi) or (lead_label.get(gi) if gi in lead_set else None)
         r["overall_score"] = w["p"]["overall"].get(gi) if w else None
         if not w or gi not in w["sec"]:
             r["partnership_score"] = r["partnership_reason"] = None
@@ -946,6 +1063,9 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
                             for t in TIERS if t in widest),
         "secondary_cutoff": f"{cutoff} per tab",
         "weights": cfg.weights,
+        "faculty_notes": (notes_mod.summary(entry, {lead: [companies[gi]["company"] for gi in idx]
+                                                    for lead, idx in lead_found.items()}, lead_from)
+                          if entry else None),
         "tab_order": ("overall score (a weaker research fit can rank above a stronger one "
                       "when relationship potential is higher)" if tab_order(cfg) == "overall"
                       else "verdict first (Strong, then Moderate, then Weak), then overall score"),

@@ -223,6 +223,10 @@ class TempProject:
         # one alignment ask per company, so call counts in tests are company
         # counts; the voting is tested on its own (test_alignment_votes.py)
         cfg.setdefault("openai", {})["alignment_votes"] = 1
+        # never the real project's lead lists or notes file
+        cfg["faculty_notes"] = {"lead_sources": []}
+        cfg["paths"]["faculty_notes"] = str(self.dir / "data" / "input" / "faculty_notes.yaml")
+        cfg["paths"]["publications"] = str(self.dir / "data" / "input" / "publications")
         for section, values in self.config_overrides.items():
             cfg.setdefault(section, {}).update(values)
         with open(self.dir / "config.yaml", "w", encoding="utf-8") as fh:
