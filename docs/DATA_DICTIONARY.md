@@ -447,6 +447,10 @@ score can be set (`funnel.min_alignment`, off by default).
   `provider_extra_per_search`) - so they never take a company's place; the
   300 and 30s above are companies only. Run Info "Candidates after
   pre-filter" shows both counts.
+- A hospital or clinic (any size) is listed only from an alignment score of
+  4 (`funnel.min_alignment_providers`); below that its Stage is "Alignment
+  below 4". Without it, a faculty member whose work has nothing to do with
+  care got a Hospitals & Clinics sheet of 1-3 scores.
 
 **Faculty publications** (`data/input/publications/*.csv`, the scholarly
 contributions export; matched to the faculty by `Name`; only Name, Title,

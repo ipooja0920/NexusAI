@@ -127,6 +127,9 @@ funnel:
   # (gene editing, oncology) fill their tabs.
   min_alignment: 0
   min_alignment_by_tier: {Small: 0, Mid: 4, Large: 4}
+  # hospitals and clinics (any size) are listed only from this score up -
+  # they have their own pre-filter places, so weak ones would fill the sheet
+  min_alignment_providers: 4
   # how each tab is ordered (and which 50 are listed):
   #   overall        - by overall score: a weaker research fit with strong
   #                    relationship potential (near, partners with

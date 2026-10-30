@@ -43,3 +43,47 @@ class TestShortlist(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestClinicFloor(unittest.TestCase):
+    """Clinics have their own shortlist places, so a faculty member whose
+    work has nothing to do with care would get a sheet full of 1-3 scores:
+    a hospital/clinic is listed only from funnel.min_alignment_providers (4)."""
+
+    def test_weak_clinic_not_listed(self):
+        import json
+        import openpyxl
+        from tests.harness import (DEFAULT_COMPANIES, FakeOpenAI, TempProject, _ChatResp,
+                                   install_fake_openai)
+        install_fake_openai()
+        orig = FakeOpenAI._Chat.create
+
+        def create(self_, model, messages):          # the cold clinic scores 3
+            if ("how well companies align" in messages[0]["content"].lower()
+                    and "Company: Cold Rehab Clinic" in messages[-1]["content"]):
+                return _ChatResp(json.dumps({"company": "Cold Rehab Clinic", "score": 3,
+                                             "reason": "r"}))
+            return orig(self_, model, messages)
+
+        FakeOpenAI._Chat.create = create
+        self.addCleanup(setattr, FakeOpenAI._Chat, "create", orig)
+        cos = list(DEFAULT_COMPANIES) + [
+            ("Hot Rehab Clinic", "20", "3.0", "5 Oak St\nStorrs, Connecticut 06269",
+             "Hot Rehab Clinic operates physical therapy clinics and studies zeolite "
+             "catalysis in clinical settings.", "www.hotclinic.example"),
+            ("Cold Rehab Clinic", "20", "3.0", "6 Oak St\nStorrs, Connecticut 06269",
+             "Cold Rehab Clinic operates physical therapy clinics.", "www.coldclinic.example")]
+        with TempProject(companies=cos) as p:
+            p.seed_geocodes()
+            p.run_enrich()
+            self.assertEqual(p.run_match(["--faculty", "Ioulia Valla"]), 0)
+            wb = openpyxl.load_workbook(p.outputs()[-1])
+        hosp = [ws for ws in wb.worksheets if ws.title.startswith("Hospitals")][0]
+        listed = [r[1] for r in hosp.iter_rows(min_row=2, values_only=True)]
+        self.assertIn("Hot Rehab Clinic", listed)
+        self.assertNotIn("Cold Rehab Clinic", listed)
+        allc = list(wb["All Companies"].iter_rows(values_only=True))
+        h = allc[0]
+        cold = [r for r in allc[1:] if r[h.index("Company")] == "Cold Rehab Clinic"][0]
+        self.assertEqual(cold[h.index("Organisation Type")], "Clinic / care provider")
+        self.assertEqual(cold[h.index("Stage")], "Alignment below 4")

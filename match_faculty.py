@@ -314,6 +314,11 @@ def is_provider(c: dict) -> bool:
     return (c.get("organisation_type") or "") in PROVIDERS
 
 
+def provider_min_alignment(cfg) -> float:
+    """Minimum alignment for a hospital/clinic to be listed (any tier)."""
+    return float(cfg.funnel.get("min_alignment_providers", 4) or 0)
+
+
 def tier_min_alignment(cfg, tier: str) -> float:
     """Minimum AI alignment score for a tier (funnel.min_alignment_by_tier,
     else funnel.min_alignment; 0 = no minimum)."""
@@ -396,8 +401,14 @@ def run_pass(candidate_idx, companies, texts, align, partner, cfg, caches, clien
     # optional floor on the AI alignment score (per tier, 0 = off)
     if min_align is None:
         min_align = cfg.funnel.get("min_alignment", 0) or 0
+    # hospitals and clinics need at least funnel.min_alignment_providers (4):
+    # they have their own pre-filter places, so for a faculty member whose
+    # work has nothing to do with care (Na Li, formulation) those places
+    # fill with 1-3 scores that would otherwise all be listed
+    prov_min = max(min_align, provider_min_alignment(cfg))
     eligible = [gi for gi in candidate_idx
-                if align_nums[gi] is not None and align_nums[gi] >= min_align]
+                if align_nums[gi] is not None
+                and align_nums[gi] >= (prov_min if is_provider(companies[gi]) else min_align)]
     cutoff = cfg.funnel["secondary_cutoff"]
     ranked = sorted(eligible, key=lambda i: prelim[i], reverse=True)
     # companies and care providers (hospitals, clinics) go forward separately,
@@ -1023,7 +1034,9 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
             if align.get(gi, {}).get("reason") == NO_TEXT_REASON:
                 return "Not scored (no description)"
             if gi not in w["p"]["eligible"]:
-                return f"Alignment below {min_align:g}" if min_align else "Alignment scored"
+                floor = (max(min_align, provider_min_alignment(cfg))
+                         if is_provider(companies[gi]) else min_align)
+                return f"Alignment below {floor:g}" if floor else "Alignment scored"
             return "Alignment scored"
         if not texts[gi]:
             return "Not scored (no description)"
