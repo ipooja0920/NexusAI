@@ -806,7 +806,11 @@ def match_one_faculty(fac: dict, companies, cfg: Settings, caches: Caches, clien
         # a company with no description can never be scored - it gets no seat
         in_small = {gi for gi in small if texts[gi]}
         ranked_by = []                      # (label, picks per round, ranked list)
-        for label, text in prefilter_queries(fac, base_profile):
+        # the researcher's added notes are also searched on their own, so a
+        # refined description gets its own shortlist places (like a keyword)
+        extra_q = ([("researcher's notes", " ".join(str(entry["extra_research"]).split()))]
+                   if entry and str(entry.get("extra_research") or "").strip() else [])
+        for label, text in prefilter_queries(fac, base_profile) + extra_q:
             vec = embed_text(client, cfg.openai["embedding_model"], text, caches)
             q_sims = rank_by_similarity(vec, company_vecs)
             if label == "profile":

@@ -341,5 +341,8 @@ in the file is matched exactly as before. Names are matched like `--faculty`
   lists under `faculty_notes: lead_sources:` in config.yaml (the all-US
   datasets). Its description is also searched for similar companies
   ("like lead: ..." in All Companies → Found By).
+- **extra_research** is added to the profile AND searched on its own at the
+  shortlist step (Found By "researcher's notes"), like a keyword - use it for
+  a refined research description a faculty member sends after the first results.
 - Run Info gets a "Faculty notes used" line listing what was applied.
 - A typo in a field name stops the run with a message naming the field.

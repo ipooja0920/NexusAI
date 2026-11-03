@@ -166,6 +166,21 @@ class TestEndToEnd(unittest.TestCase):
         dist = [r[h.index("Distance Score")] for r in allc[1:] if r[h.index("Distance (mi)")] is not None]
         self.assertTrue(dist and all(d == 1.0 for d in dist), dist)   # all within 400 miles
         found = {r[h.index("Company")]: r[h.index("Found By")] for r in allc[1:]}
+        # the notes are searched on their own (they fill the few places left
+        # in this small fixture before the lead search; that one is tested below)
+        self.assertIn("researcher's notes", set(found.values()))
+        self.assertEqual(found["Pyro Energy Inc."], "researcher's lead")
+
+    def test_like_lead_search(self):
+        with TempProject(config_overrides={"prefilter": {"top_n_candidates": 3}}) as p:
+            p.seed_geocodes()
+            p.run_enrich()
+            self._write_notes(p, {FACULTY: {"leads": [LEAD]}})
+            self.assertEqual(p.run_match(["--faculty", FACULTY]), 0)
+            wb = openpyxl.load_workbook(p.outputs()[-1])
+        allc = list(wb["All Companies"].iter_rows(values_only=True))
+        h = allc[0]
+        found = {r[h.index("Company")]: r[h.index("Found By")] for r in allc[1:]}
         self.assertIn("like lead: Pyro Energy", set(found.values()))
         self.assertEqual(found["Pyro Energy Inc."], "researcher's lead")
 
