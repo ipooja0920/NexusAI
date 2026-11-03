@@ -50,9 +50,14 @@ _TITLES = {"dr", "prof", "professor", "mr", "mrs", "ms", "phd", "md"}
 
 
 def _name_words(name) -> list:
+    """Name words without titles. "Md" at the START is a name (Mohammad -
+    "Md Elias Uddin", "Md Uddin"), not the medical degree: only a trailing
+    "MD" ("John Smith, MD") is dropped."""
     s = unicodedata.normalize("NFKD", "" if name is None else str(name))
     s = "".join(ch for ch in s if not unicodedata.combining(ch)).lower()
-    return [w for w in re.findall(r"[a-z0-9]+", s) if w not in _TITLES]
+    words = re.findall(r"[a-z0-9]+", s)
+    return [w for k, w in enumerate(words)
+            if w not in _TITLES or (w == "md" and k == 0 and len(words) > 1)]
 
 
 def first_last(name) -> str:

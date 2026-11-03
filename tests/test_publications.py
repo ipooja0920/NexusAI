@@ -227,3 +227,16 @@ class TestMiddleNames(unittest.TestCase):
             self.assertIn("use --row", err)
         finally:
             p.__exit__()
+
+
+class TestMdNames(unittest.TestCase):
+    """"Md" at the start is a name (Mohammad), not the medical degree: the
+    registration says "Md Elias Uddin", his publications export "Md Uddin"."""
+
+    def test_md_first_name(self):
+        from nexus.faculty_registration import first_last, same_person
+        self.assertTrue(same_person("Md Uddin", "Md Elias Uddin"))
+        self.assertFalse(same_person("Md Uddin", "Md Rahman"))
+        self.assertEqual(first_last("John Smith, MD"), "john smith")
+        self.assertEqual(first_last("Dr. Mary Anne Amalaradjou"), "mary amalaradjou")
+
