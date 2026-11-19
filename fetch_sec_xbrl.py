@@ -167,7 +167,7 @@ def parse_quarter(text: str) -> tuple:
 # requirement, not an attempt to look like a browser.
 CONTACT = "lakshmipoojaraj@gmail.com"
 HEADERS = {
-    "User-Agent": f"NexusAI-UConn ({CONTACT})",
+    "User-Agent": f"BridgeAI-UConn ({CONTACT})",
     "Accept": "application/json",
     "Accept-Encoding": "gzip, deflate",
 }
@@ -378,7 +378,7 @@ def main() -> int:
     tags = args.tag or DEFAULT_TAGS
     quarters = sorted(args.quarters) if args.quarters else default_quarters()
 
-    print("\n=== NexusAI: SEC XBRL fetch ===")
+    print("\n=== BridgeAI: SEC XBRL fetch ===")
     SOURCE_DIR.mkdir(parents=True, exist_ok=True)
 
     print("\nLoading SEC ticker -> CIK map...")

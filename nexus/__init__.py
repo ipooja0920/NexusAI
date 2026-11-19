@@ -1,1 +1,1 @@
-"""NexusAI faculty-company matching core modules."""
+"""BridgeAI faculty-company matching core modules."""

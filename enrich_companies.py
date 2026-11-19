@@ -151,7 +151,7 @@ def main() -> int:
     caches = Caches(cfg.cache_dir)
     combined_path = cfg.path("companies_combined", "data/companies_combined.xlsx")
 
-    print("\n=== NexusAI Stage 0: Datasource Enrichment ===\n")
+    print("\n=== BridgeAI Stage 0: Datasource Enrichment ===\n")
     if not combined_path.exists():
         print(f"ERROR: {combined_path} not found.\n"
               "  Run 'python combine_companies.py' first - it attaches the source\n"

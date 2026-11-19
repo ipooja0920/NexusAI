@@ -6,7 +6,7 @@ collaborator on someone else's trial (a university-led trial a company
 helps pay for is exactly the kind of tie we want to see). Trials run only
 by universities, hospitals or government are not downloaded.
 
-Only the fields NexusAI uses are requested, and nothing that names a person:
+Only the fields BridgeAI uses are requested, and nothing that names a person:
 investigators, contacts and officials are never downloaded at all.
 
   who     lead sponsor and collaborators, each with ClinicalTrials.gov's class
@@ -65,7 +65,7 @@ FIELDS = [
 PAGE_SIZE = 1000          # the API's maximum
 PAUSE = 1.5               # seconds between calls - ClinicalTrials.gov asks
                           # for roughly 50 requests a minute at most
-HEADERS = {"User-Agent": "NexusAI-UConn research matching (lakshmipoojaraj@gmail.com)",
+HEADERS = {"User-Agent": "BridgeAI-UConn research matching (lakshmipoojaraj@gmail.com)",
            "Accept": "application/json"}
 
 
@@ -121,7 +121,7 @@ def main() -> int:
     shutil.rmtree(partial, ignore_errors=True)
     partial.mkdir(parents=True)
 
-    print("\n=== NexusAI: ClinicalTrials.gov download ===\n")
+    print("\n=== BridgeAI: ClinicalTrials.gov download ===\n")
     token, n, studies, total = None, 0, 0, None
     started = time.time()
     while True:

@@ -211,7 +211,7 @@ def main() -> int:
     cfg = Settings()
     src = cfg.sources_dir / "formd"
     dst = cfg.cache_dir / "formd_clean.csv"
-    print(f"\n=== NexusAI: clean Form D filings ===\n\n  reading {src}")
+    print(f"\n=== BridgeAI: clean Form D filings ===\n\n  reading {src}")
     out = clean(src)
     dst.parent.mkdir(parents=True, exist_ok=True)
     try:

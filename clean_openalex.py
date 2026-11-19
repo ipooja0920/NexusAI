@@ -145,7 +145,7 @@ def main() -> int:
     from nexus.settings import Settings
     cfg = Settings()
     src = cfg.sources_dir / "openalex"
-    print(f"\n=== NexusAI: clean OpenAlex research ties ===\n\n  reading {src / 'ties'}")
+    print(f"\n=== BridgeAI: clean OpenAlex research ties ===\n\n  reading {src / 'ties'}")
     comp, tie = clean(src / "ties", src / "openalex_raw_institutions.json")
     out_c, out_t = cfg.cache_dir / "openalex_companies.csv", cfg.cache_dir / "openalex_ties.csv"
     try:

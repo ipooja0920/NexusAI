@@ -34,10 +34,11 @@ DEFAULT_ACADEMIC = {
 class Settings:
     def __init__(self, config_path=None):
         # Resolved at call time (not import time) so the config location can
-        # be redirected -- by tests, or via the NEXUSAI_CONFIG env var when
+        # be redirected -- by tests, or via the BRIDGEAI_CONFIG env var (NEXUSAI_CONFIG, the old name, still works) when
         # running the same code against a different project folder.
         if config_path is None:
-            env_path = os.getenv("NEXUSAI_CONFIG", "").strip()
+            env_path = (os.getenv("BRIDGEAI_CONFIG", "").strip()
+                        or os.getenv("NEXUSAI_CONFIG", "").strip())   # old name still works
             config_path = Path(env_path) if env_path else CONFIG_PATH
         config_path = Path(config_path)
         if not config_path.exists():

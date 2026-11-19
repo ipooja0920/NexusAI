@@ -43,7 +43,7 @@ def trial(nct, lead=("Acme Bio, Inc.", "INDUSTRY"), collaborators=(),
 
 
 def run(*pages, gz=True):
-    root = Path(tempfile.mkdtemp(prefix="nexusai_ctgov_"))
+    root = Path(tempfile.mkdtemp(prefix="bridgeai_ctgov_"))
     for i, studies in enumerate(pages, 1):
         body = {"studies": list(studies), "nextPageToken": "x"}
         if gz:

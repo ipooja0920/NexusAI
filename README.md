@@ -1,155 +1,331 @@
 # BridgeAI — Faculty ↔ Company Matching
 
-Matches UConn faculty research profiles against a Capital IQ company
-datasource and produces a ranked top-20 workbook per faculty member.
+BridgeAI matches UConn faculty to companies that are good candidates for a
+research partnership. For one faculty member it reads their research profile
+(registration form, scholarly publications and optional notes), compares it
+with a Capital IQ company list enriched from public data, and writes one
+Excel workbook with ranked, explained partner lists:
 
-See **[PRODUCT_SPEC.md](PRODUCT_SPEC.md)** for the full architecture, how
-it differs from the previous watcher/monster-program system, and the
-scoring model reference.
+- **Small** companies (under $100m revenue, or revenue unknown) — top 50
+- **Mid** companies ($100m – $1bn) — top 50
+- **Large** companies ($1bn and above) — top 50
+- **Hospitals & Clinics** — top 50 (any size)
+- **Researcher's leads** — only when the faculty member named companies
+- **All Companies** — every company, its scores and how far it got
+- **Run Info** — exactly what was used for the run
 
-## Project layout
+Every listed company has a written justification that starts with a verdict
+(Strong / Moderate / Weak fit, or Fit unclear).
 
-```
-NexusAI/
-├── config.yaml               every path, weight, cutoff and model name
-├── requirements.txt
-├── .env                      your OpenAI key (git-ignored, never commit)
-├── .env.example
-│
-├── enrich_companies.py       STAGE 0 — builds companies_enriched.xlsx
-├── match_faculty.py          STAGE 1 — faculty → ranked companies
-│
-│                             source steps: fetch_* downloads, enrich_* matches
-├── enrich_funding.py           SEC Form D          → cache
-├── enrich_sbir.py              SBIR/STTR awards    → cache
-├── fetch_sec_xbrl.py           SEC XBRL            → sources/
-├── enrich_xbrl.py              SEC XBRL            → cache
-├── fetch_openalex.py           OpenAlex            → sources/
-│
-│                             raw extracts, for checking a figure by eye
-├── export_formd_raw.py         every Form D filing → review/formd_raw.csv
-├── inspect_formd.py            one company's filings → stdout
-│
-├── run_enrich.sh             run Stage 0 detached, so you can walk away
-├── run_tests.py              159 tests, ~5s, no API key or network needed
-│
-├── nexus/                    the shared library
-│   ├── settings.py             config loader, path resolution
-│   ├── excel_io.py             read/write every workbook
-│   ├── geo.py                  address cleaning, geocoding, distance
-│   ├── prefilter.py            embeddings + cosine similarity
-│   ├── scoring.py              LLM prompts + component score maths
-│   ├── matching.py             company matching, shared by every source
-│   ├── funding.py              joins the source caches onto companies
-│   └── cache.py                the JSON caches
-│
-├── tests/                    each test builds its own throwaway project
-├── logs/                     git-ignored — written by run_enrich.sh
-│
-└── data/                     git-ignored — see below
-    ├── input/                  files YOU provide
-    ├── sources/                downloaded from outside
-    ├── cache/                  computed by us
-    ├── review/                 match-quality workbooks
-    ├── output/                 final per-faculty results
-    └── companies_enriched.xlsx
+How the matching and scoring work is described in
+**[PRODUCT_SPEC.md](PRODUCT_SPEC.md)**; every output column is explained in
+**[docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md)**;
+**[COMMANDS.md](COMMANDS.md)** is a shorter command cheat-sheet.
+
+> The product is called **BridgeAI**. The project folder (`NexusAI`), the
+> GitHub repository and the Python package folder (`nexus/`) keep their
+> original names, so existing paths and commands keep working.
+
+---
+
+## Quick start — one faculty member, start to finish
+
+Run everything from the project folder, in Terminal:
+
+```bash
+cd ~/Downloads/NexusAI
 ```
 
-Only `data/` and `.env` stay off GitHub. Everything else is code and is
-safe to clone, zip, or hand to someone else.
+1. **Company list.** Export the Capital IQ screen (see *The Capital IQ
+   export* below), save it as a real `.xlsx` and put it at
+   `data/input/companies_raw.xlsx`.
+2. **Faculty files.**
+   - Registration form export at
+     `data/input/BDIFR Faculty Registration From-documents.csv` (exact name).
+   - Their scholarly-contributions CSV (optional) in `data/input/publications/`.
+   - Anything extra they told you (optional) in `data/input/faculty_notes.yaml`.
+3. **Check the export:**
+   ```bash
+   python check_export.py
+   ```
+4. **OpenAlex research ties** for the companies in the export (needs
+   `OPENALEX_API_KEY` in `.env`; already-fetched companies are skipped):
+   ```bash
+   python fetch_openalex_ties.py
+   python clean_openalex.py
+   ```
+5. **Enrich the companies** (builds the combined file first, then enriches;
+   runs in the background and keeps the Mac awake):
+   ```bash
+   ./run_enrich.sh
+   ```
+6. **Match the faculty member**, keeping the Mac awake while it runs:
+   ```bash
+   caffeinate -i python match_faculty.py --faculty "First Last"
+   ```
+   or by their row on the registration form: `--row 42`.
+7. The workbook is written to `data/output/<Name> Match <date_time>.xlsx`.
 
-## How it works
+Re-running the same faculty member, or another one on the same company list,
+needs only step 6 — and is fast, because AI answers are cached.
 
-**Stage 0 — `enrich_companies.py`** (run once, and again only when you
-refresh the Capital IQ extract): cleans every company record, geocodes the
-address → distance from UConn Storrs, parses revenue/employees into
-component scores, and computes a description embedding. Results are written
-to `data/companies_enriched.xlsx`; geocodes and embeddings are cached in
-`data/cache/` so a datasource refresh only pays for what changed.
-
-**Source steps** (run on their own schedule, whenever you refresh a
-download): each reads one external dataset, matches it to your companies,
-and writes the result to `data/cache/`. They never touch the enriched
-workbook — Stage 0 is the only thing that writes it, and picks these caches
-up on its next run. If a cache doesn't exist yet, those columns just come
-out blank; nothing breaks and no run order is required.
-
-| Script | Reads | Answers |
-|---|---|---|
-| `enrich_funding.py` | `sources/formd/` | has this company raised private capital, how much, how recently? |
-| `enrich_sbir.py` | `sources/sbir/` | has the federal government paid it to do research, and did it bring a university partner? |
-| `enrich_xbrl.py` | `sources/xbrl/` | how much does it spend on R&D? (public companies only) |
-| `fetch_openalex.py` | OpenAlex API | does it publish research or fund academic work? |
-
-**Stage 1 — `match_faculty.py`** (run whenever faculty have `Flag = N`):
-for each unmatched faculty, builds a research profile, pre-filters the
-company universe by embedding similarity (top 300 by default), scores each
-candidate with the LLM alignment rubric (1–9), takes the top 40 for
-partnership + funding scoring (cached across faculty), computes the final
-weighted score, writes `data/output/<Faculty> Match <timestamp>.xlsx`, and
-flips the faculty's Flag to `Y`.
+---
 
 ## One-time setup
 
 ```bash
-# 1. Create a virtual environment  (Windows: python -m venv venv)
-python3 -m venv venv
-
-# 2. Activate it                   (Windows: venv\Scripts\activate)
-source venv/bin/activate
-
-# 3. Install dependencies
+python3 -m venv venv                 # Windows: python -m venv venv
+source venv/bin/activate             # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# 4. Add your OpenAI key
-cp .env.example .env      # then edit .env and paste your real key
+cp .env.example .env                 # then paste your keys into .env
 ```
 
-Requires Python 3.10+ (`python3 --version` to check).
+`.env` holds `OPENAI_API_KEY` (required for matching and enrichment) and
+`OPENALEX_API_KEY` (free, from <https://openalex.org/settings/api>; needed by
+`fetch_openalex_ties.py`). It is git-ignored and never leaves your machine.
+
+Requires Python 3.10+. Any Python environment with `requirements.txt`
+installed works (a venv, or conda's `base`); `./run_enrich.sh` finds
+`venv/` or `.venv/` by itself.
+
+Check the install — no API key or network needed:
+
+```bash
+python run_tests.py                  # 546 tests
+```
+
+---
+
+## Input files
+
+| File | What it is | Notes |
+|---|---|---|
+| `data/input/companies_raw.xlsx` | Capital IQ screening export | Must be a real `.xlsx` (see below). Exact name. |
+| `data/input/BDIFR Faculty Registration From-documents.csv` | BD-IFR faculty registration form export | **Exact name** — "From", not "Form". Only research fields are read. |
+| `data/input/publications/*.csv` | Scholarly-contributions exports, one or more | Matched to the faculty member by the `Name` column; only Name, Title, Type and Year are read. |
+| `data/input/faculty_notes.yaml` | Optional per-faculty adjustments | See *Faculty notes* below. |
+| `data/input/Faculty Database.xlsx` | Older faculty list with a `Flag` column | Run with no `--faculty` / `--row` to match everyone with `Flag = N`; `--faculty` also looks here if the name is not on the registration form. |
+
+**Registration form downloads get renamed.** Google Sheets often saves it
+as `BDIFR Faculty Registration From-documents - BDIFR Faculty Registration
+From-documents.csv.csv`. Rename it to the exact name above and remove or
+rename the older copy. If the file is missing, `match_faculty.py --faculty`
+reports "not found" and lists only the Faculty Database names.
+
+**Publications files** must sit in `data/input/publications/` — a CSV left
+directly in `data/input/` is not read. The file name does not matter; the
+`Name` column does. Names are matched ignoring accents, case and
+punctuation, and then by first + last name, so "Mary Amalaradjou" matches
+"Mary Anne Roshni Amalaradjou" and "Md Uddin" matches "Md Elias Uddin".
+Check the titles: these exports can contain another researcher's papers
+under the same name (use `ignore_publications` in the faculty notes).
+
+---
+
+## The Capital IQ export
+
+**Screen criteria** used so far:
+
+- **Industry Classifications** — the faculty member's sector(s), e.g.
+  *Pharmaceuticals, Biotechnology and Life Sciences*. Pick every industry
+  their work touches; companies outside the screen can never be matched
+  (an ocean-waves researcher needs more than *Software & Services*).
+- **Geographic Locations** — *Northeast* and *Midatlantic*. Capital IQ does
+  not put **Pennsylvania** in either: add it as its own location (search
+  "Pennsylvania" in the location picker), or Philadelphia/Pittsburgh
+  companies are missing.
+- **Company Type** — Public Company, Private Company.
+- **Company Status** — Operating, Operating Subsidiary (Reorganizing is
+  also kept). Acquired, Out of Business and Liquidating companies are left
+  out of every tab anyway.
+
+**Columns (data items) to export** — any order; they are found by header
+name on row 8:
+
+| Required | Optional |
+|---|---|
+| Company Name, Industry Classifications, Company Type, Total Employees [Latest Annual], Total Revenue [LTM] ($USDmm, Historical rate), Offices, Business Description, Website, Company Status | Exchange:Ticker |
+
+Other columns (Geographic Locations, Competitors, ...) are allowed and
+ignored.
+
+**Save as `.xlsx`.** Capital IQ downloads `.xls`; renaming it is not enough
+(it fails with `BadZipFile`). Open it in Excel and *Save As → Excel Workbook
+(.xlsx)*.
+
+**Two exports for one list** (e.g. Northeast + Midatlantic, and Pennsylvania
+separately) must be stitched into one sheet with one header row before
+`check_export.py`. A company in both should appear once.
+
+Then:
+
+```bash
+python check_export.py               # every needed column found and filled in?
+```
+
+---
+
+## Running each step
+
+### Enrichment — `./run_enrich.sh`
+
+Runs `combine_companies.py` (Capital IQ + SBIR, Form D, SEC XBRL,
+ClinicalTrials.gov, OpenAlex → `data/companies_combined.xlsx`) and then
+`enrich_companies.py` (geocoding, distance, size and funding scores, AI
+company profiles, embeddings → `data/companies_enriched.xlsx`). The job runs
+in the background under `caffeinate`, so it carries on if you close Terminal
+or the screen sleeps, and it shows progress live with a time estimate.
+
+```bash
+./run_enrich.sh              # start and watch
+./run_enrich.sh --no-watch   # start and get the prompt back
+./run_enrich.sh --watch      # watch a running job again
+./run_enrich.sh --status     # one line: running or not, last progress
+./run_enrich.sh --stop       # stop the job
+```
+
+- **Ctrl-C while watching stops only the watching** — the job keeps going.
+  (The "Terminated: 15 tail -n 20 -f" line at the end is that watcher
+  closing, not an error.)
+- It refuses to start a second run while one is going.
+- **Keep the lid open.** Closing it sleeps the Mac and pauses the job. With
+  power and an external display, clamshell mode works.
+- Re-running is cheap for companies already done: geocodes, AI profiles and
+  embeddings are cached; only new or changed companies cost time.
+
+Foreground alternatives (testing): `python combine_companies.py` then
+`python enrich_companies.py` with `--skip-geocode`, `--skip-embeddings` or
+`--skip-profiles`.
+
+### Matching — `match_faculty.py`
+
+```bash
+caffeinate -i python match_faculty.py --faculty "Sharon Casavant"
+caffeinate -i python match_faculty.py --row 19          # row on the registration form
+python match_faculty.py --row 19 --dry-run              # what it would do, no API spend
+python match_faculty.py --row 19 --sample 200           # small cost / speed test
+caffeinate -i python match_faculty.py --row 19 --full   # AI-score EVERY small company (hours)
+python match_faculty.py                                 # Faculty Database: everyone with Flag = N
+```
+
+- **`caffeinate -i`** keeps the Mac from idle-sleeping until the run ends
+  (the lid must still stay open).
+- **To stop a run, press Ctrl-C.** AI answers so far are cached; running the
+  same command again resumes from there.
+- **Do not press Ctrl-Z** — it *pauses* the run instead of stopping it. If
+  you did, type `jobs` and then `kill %1` (the number `jobs` shows).
+- Lines like `python(1234) MallocStackLogging: can't turn off malloc stack
+  logging ...` are a harmless macOS message.
+- The first run for a faculty member on a large list makes many AI calls
+  (three per company scored), so it can take a while; named leads add more.
+  If OpenAI reports rate-limit errors, lower `openai.concurrency` in
+  `config.yaml`.
+
+### Faculty notes — `data/input/faculty_notes.yaml` (optional)
+
+Adjusts **one** faculty member's run. Anyone not listed runs exactly as
+usual. Names are matched like `--faculty`. Every field is optional:
+
+```yaml
+"Sharon Casavant":
+  extra_research: |
+    A refined research description the faculty member sent.
+  distance_full_score_miles: 400      # full distance score up to 400 miles
+  leads:                              # companies they named
+    - name: Jazz Pharmaceuticals
+      note: What they told you about it (interest, grants, caveats).
+    - GW Pharmaceuticals              # a name alone is fine
+  ignore_publications:                # leave out titles containing these words
+    - HIV stigma
+```
+
+- **extra_research** — added to the research profile, and also searched on
+  its own when the shortlist is built (Found By "researcher's notes").
+- **distance_full_score_miles** — companies up to this distance get the full
+  distance score; beyond it the usual decline starts from there.
+- **leads** — the companies *named* like each lead (or, if none is, those
+  naming it as their parent) are always AI-scored, shown on a
+  **Researcher's leads** sheet (first sheet), and not penalised for
+  distance. The note is read by the AI with the company's profile. Companies
+  the lead acquired are not treated as the lead. A lead missing from the
+  export is taken from the lists under `faculty_notes: lead_sources:` in
+  `config.yaml`. Each lead's description is also searched for similar
+  companies ("like lead: …" in Found By) — with many leads this adds a lot of
+  scoring time.
+- **ignore_publications** — any title containing one of these words is left
+  out.
+- Run Info gets a **Faculty notes used** line. A misspelt field name stops
+  the run with a message naming it.
+
+### Keeping several company lists
+
+Only one list is active at a time (`companies_raw.xlsx` → enriched). To keep
+a list for later, copy its raw export (and, optionally, its
+`companies_enriched.xlsx`) into a folder under `data/datasets/<name>/`. To
+switch back, copy the raw export to `data/input/companies_raw.xlsx` and run
+steps 3–5 of the quick start; cached work makes this much faster than the
+first time. Make sure `companies_enriched.xlsx` is the right list before
+matching — Run Info shows the number of companies used.
+
+---
+
+## Reading the output
+
+- **Verdict** (start of each justification) — research fit only: Strong
+  (alignment 7–9), Moderate (5–6), Weak (1–4), Fit unclear (no score).
+- **Overall Score** — research fit (30%) plus distance (25%), partnership
+  likelihood (15%), revenue (15%), funding available (10%) and employees
+  (5%). Tabs are sorted by it, so a nearby, well-funded Weak fit can rank
+  above a distant Strong fit (`funnel.tab_order: verdict_first` lists Strong
+  first instead).
+- Mid and Large list only companies with alignment 4 or more; hospitals and
+  clinics also need 4 or more.
+- One company per corporate group is listed; the others show "Same group as
+  … (listed)" in All Companies.
+- A justification ending "Note: Capital IQ has no website for this company"
+  flags a record that may be out of date — check it still operates.
+- **All Companies → Stage / Found By** tell you how far each company got and
+  which search brought it in.
+
+Column-by-column definitions: [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md).
+
+---
 
 ## The `data/` folder
 
-`data/` is git-ignored — Capital IQ extracts and faculty lists never go to
-GitHub. Each subfolder holds one *kind* of file, which is what makes it
-obvious where a new file belongs and what is safe to delete:
+`data/` is git-ignored — licensed Capital IQ data, faculty files and
+results never go to GitHub.
 
 ```
 data/
-├── input/                    files YOU provide       ← never written by the programs
+├── input/                      files YOU provide (never written by the programs)
 │   ├── companies_raw.xlsx
-│   └── Faculty Database.xlsx
-├── sources/                  downloaded from outside ← re-downloadable
-│   ├── formd/                  SEC Form D quarters
-│   ├── sbir/                   award_data.csv
-│   ├── xbrl/                   R&D frames + ticker map
-│   └── openalex/               raw API pulls
-├── cache/                    computed by us          ← delete to force a rebuild
-│   ├── geocode.json
-│   ├── embeddings.json
-│   ├── funding_formd.json
-│   ├── funding_sbir.json
-│   ├── rd_xbrl.json
-│   └── company_scores.json
-├── review/                   match-quality workbooks, to check by eye
-├── output/                   the final per-faculty results
-└── companies_enriched.xlsx   the hand-off between enrichment and matching
+│   ├── BDIFR Faculty Registration From-documents.csv
+│   ├── publications/            scholarly-contributions CSVs
+│   ├── faculty_notes.yaml       optional
+│   └── Faculty Database.xlsx    older faculty list (Flag column)
+├── sources/                    downloaded public data (re-downloadable)
+│   ├── formd/  sbir/  xbrl/  openalex/  ...
+├── cache/                      computed by us (delete only to force a rebuild)
+│   ├── geocode.json, embeddings.json, company_profiles.json
+│   ├── alignment_scores.json, company_scores.json   AI answers
+│   └── *_clean.csv, openalex_*.csv                  cleaned source data
+├── datasets/                   saved company lists (also the lead sources)
+├── review/                     match-quality sheets, to check by eye
+├── output/                     one workbook per faculty run
+├── companies_combined.xlsx     Capital IQ + source facts  (combine_companies.py)
+└── companies_enriched.xlsx     + scores and profiles      (enrich_companies.py)
 ```
 
-**How to decide where a new file goes:** if you deleted it, would you
-*re-download* it or *re-compute* it? Downloads go in `sources/`, computed
-results in `cache/`. That split is what lets you wipe all of `cache/` to
-force a clean rebuild without losing a single download, and clear `sources/`
-to reclaim disk without losing computed work.
-
-`companies_enriched.xlsx` sits at the top rather than in a subfolder because
-it belongs to neither stage — Stage 0 builds it, Stage 1 consumes it.
-
-On a fresh clone, create `data/input/` and add these two files:
-
-| File | What it is |
+| You manage | The programs manage |
 |---|---|
-| `data/input/companies_raw.xlsx` | Capital IQ screening export (headers on row 8, data from row 9; columns A=name, B=exchange:ticker, C=employees, D=revenue $USDmm, E=company type, G=address, I=description, J=website, K=industry) |
-| `data/input/Faculty Database.xlsx` | Headers on row 1: Faculty, School/College, Department, Research Description, Industry Classification1, Industry Classification2, Flag (N = not yet matched) |
+| everything in `input/`, the downloads in `sources/formd/` and `sources/sbir/`, saved lists in `datasets/` | `cache/`, `review/`, `output/`, the combined and enriched workbooks |
+
+If a workbook is open in Excel when a program writes it, you get a message
+to close it and re-run; nothing is lost.
+
+---
 
 ## Where to download each source
 
@@ -232,7 +408,7 @@ signal.
 
 **Ignore the year filter on the website.** The page lets you filter by year,
 agency, phase, program and state before downloading — but take the whole file
-anyway and narrow at read time with `--min-year`. Unlike Form D, SBIR is a
+anyway. Unlike Form D, SBIR is a
 single CSV covering every award since 1983, so history is free here. Filtering
 at download time just means re-downloading when you change your mind.
 
@@ -243,261 +419,114 @@ free.
 
 SBIR refreshes the file monthly.
 
-### SEC XBRL — R&D expense for public companies
+### SEC XBRL — R&D, revenue and cash for public companies
 
-**No manual download** — `fetch_sec_xbrl.py` pulls it from SEC's API:
+**No manual download** — `fetch_sec_xbrl.py` pulls it from SEC's API, and
+`clean_xbrl.py` turns it into `data/cache/xbrl_clean.csv`:
 
 ```bash
-python fetch_sec_xbrl.py            # CY2023-CY2025, about 1.3 MB
-python fetch_sec_xbrl.py --years 2026
-python fetch_sec_xbrl.py --refresh  # ignore the cache and refetch
+python fetch_sec_xbrl.py                    # CY2023-CY2025 + the last 4 quarter-ends
+python fetch_sec_xbrl.py --years 2024 2025
+python fetch_sec_xbrl.py --quarters 2026Q1 2026Q2
+python fetch_sec_xbrl.py --refresh          # ignore the cache and refetch
+python clean_xbrl.py
 ```
 
-Capital IQ says how big a company is, not how much it spends on research.
-For a partnership that is the more useful number — some of the most
-research-intensive companies in the datasource report almost no revenue.
+It fetches R&D expense and revenue (money over a year) and cash and
+short-term investments (money held at a quarter-end). Capital IQ says how big
+a company is, not how much it spends on research or has in the bank; for a
+partnership those are the more useful numbers. Revenue is read from several
+XBRL tags, because companies split between the older "Revenues" tag and the
+newer contract-revenue tags.
 
-It downloads from two places, both browsable if you want to look:
+It downloads from two places:
 
 | What | Where |
 |---|---|
-| R&D expense, one calendar year at a time | `https://data.sec.gov/api/xbrl/frames/us-gaap/ResearchAndDevelopmentExpense/USD/CY2024.json` |
+| One concept, one period, every filer | `https://data.sec.gov/api/xbrl/frames/us-gaap/<Tag>/USD/CY2024.json` |
 | Ticker → CIK map | <https://www.sec.gov/files/company_tickers.json> |
 
-The frames API returns one accounting concept for one year across *every*
-filer, so three years is three small calls rather than one call per
-company. SEC's API documentation is at
-<https://www.sec.gov/search-filings/edgar-application-programming-interfaces>.
-
-**Refresh roughly once a year.** A calendar year only fills up once
-companies file their annual reports, 60–90 days after their year ends, and
-then stops changing. Completed years are cached and never refetched, so
-re-running is free. The current year returns a nearly empty frame rather
-than an error, so the script warns instead of writing a misleading file.
-
-Two things that bite if you script this yourself:
-
-- **SEC requires a `User-Agent` header** identifying you, and returns a bare
-  `403` without one — which looks exactly like a missing file. The script
-  sets it; a browser sets its own, so clicking the links above works.
-- **Revenue is fragmented across several XBRL tags** and none is complete,
-  which is why this fetches R&D expense only. R&D has one dominant tag.
-
-This only reaches publicly listed companies — a private company files no
-XBRL at all — so it improves what you know about companies you already have
-data on rather than reaching new ones.
+SEC requires a `User-Agent` header and returns a bare `403` without one; the
+script sets it. XBRL only reaches publicly listed companies — a private
+company files none — so it improves what you know about companies you
+already have rather than reaching new ones.
 
 ### OpenAlex — research and funding track record
 
 No manual download — `fetch_openalex.py` pulls it from the API into
-`data/sources/openalex/`. An API key is optional but raises the daily budget
+`data/sources/openalex/`, and `fetch_openalex_ties.py` asks, for each company
+that could be one of yours, which universities it funded or co-wrote papers
+with (counts only — no titles or author names). `clean_openalex.py` turns
+that into `data/cache/openalex_companies.csv` and `openalex_ties.csv`. An API key is optional but raises the daily budget
 from $0.10 to $1; get one free at <https://openalex.org/settings/api> and add
 it to `.env` as `OPENALEX_API_KEY=...`.
 
-### Three rules about the company datasource
-
-**1. The filename must match `config.yaml` exactly — treat it as
-case-sensitive.** The name isn't hardcoded anywhere; the only thing that
-decides it is this line:
-
-```yaml
-paths:
-  companies_raw: data/input/companies_raw.xlsx
-```
-
-`Companies_raw.xlsx` (capital C) fails on Linux and may or may not work on
-macOS depending on how the disk was formatted. Don't rely on it — match
-the name exactly, or change the config line to match your file.
-
-**2. To refresh the datasource, overwrite the file — keep the same name.**
-The programs only ever *read* `companies_raw.xlsx`; they never write or
-delete it, so replacing it is your action. Same name means `config.yaml`
-never has to change, and nothing gets forgotten on the next refresh.
-
-**3. Never delete `companies_enriched.xlsx`.** It is rebuilt and
-overwritten on every enrichment run. There is no situation where deleting
-it first helps.
-
-> **The one trap:** if you add the new export under a *different* name
-> (`companies_raw_v2.xlsx`), both files sit in the folder and the program
-> keeps reading the old one — with no error, because the configured file
-> still exists. Stage 0 prints the path and company count it read, so
-> check those two lines after a refresh:
->
-> ```
-> Reading Capital IQ export: .../data/input/companies_raw.xlsx
-> Found 2478 companies.
-> ```
-
-## Running
+### Refreshing a source
 
 ```bash
-source venv/bin/activate            # (each new terminal session)
-
-python enrich_companies.py          # after adding/refreshing the datasource
-python match_faculty.py             # match everyone with Flag = N
+python clean_sbir.py              # or clean_formd.py / clean_xbrl.py /
+                                  # clean_clinicaltrials.py / clean_openalex.py
+./run_enrich.sh                   # rebuilds the combined file, then enriches
 ```
 
-### Long runs — closing the terminal
-
-`enrich_companies.py` geocodes and embeds every company, which takes a
-while on a full datasource. Running it in the foreground means leaving the
-Terminal window open and the Mac awake for the duration.
+ClinicalTrials.gov downloads itself (run from your own Terminal):
 
 ```bash
-./run_enrich.sh                     # any enrich_companies.py flag works
+python fetch_clinicaltrials.py --test     # 3 trials, check it works
+python fetch_clinicaltrials.py
+python clean_clinicaltrials.py
 ```
 
-It prints a PID and a log path, then returns you to the prompt:
+Order does not matter: a clean file that does not exist yet leaves its
+columns blank. (`enrich_funding.py`, `enrich_sbir.py` and `enrich_xbrl.py`
+are the older path and no longer feed the enriched file.)
 
-```
-  started    PID 4821
-  log        logs/enrich_20260916_215746.log
-
-  watch it   tail -f logs/enrich_20260916_215746.log
-  check it   kill -0 4821 && echo running || echo finished
-  stop it    kill 4821
-```
-
-You can now close the Terminal window, quit Terminal, or log out — the job
-keeps going. Come back and `tail` the log.
-
-Three things it does that a bare `python enrich_companies.py &` does not:
-
-* **`caffeinate -i`** stops the Mac idle-sleeping while the job runs, and
-  releases the moment it ends — so the machine sleeps normally afterwards
-  instead of staying awake all night.
-* **Unbuffered output**, so `tail -f` shows progress live. Python buffers
-  stdout when it is not writing to a terminal, which makes the log look
-  frozen for minutes at a time.
-* **Refuses to start twice.** Two runs would fight over the same caches and
-  the same output workbook, and the loser would write a half-built file.
-
-**The lid still has to stay open.** Closing it sleeps the Mac and pauses
-the job until you open it again; no command can override that. If you need
-the lid shut, plug into power with an external display attached — that is
-clamshell mode, and the same command works.
-
-### Checking a figure in the enriched workbook
-
-The workbook gives one aggregated line per company. When a number there
-looks wrong, these print the filings underneath it, with SEC's own column
-names and no cleaning applied:
+To check a Form D figure by eye:
 
 ```bash
-python export_formd_raw.py               # all companies → review/formd_raw.csv
-python export_formd_raw.py --company Agilix   # just one
-python inspect_formd.py "Agilix"         # straight to the screen
+python export_formd_raw.py --company Agilix   # → data/review/formd_raw.csv
+python inspect_formd.py "Agilix"              # straight to the screen
 ```
 
-Two helper columns say what the pipeline *would* do without doing it:
-`_would_be_dropped` names the reason a row would be discarded, and
-`_span_years` is the gap between first sale and filing date.
-
-### The source steps
-
-Each public dataset has its own script. They read a download, match it to
-your companies, and write the result to `data/cache/` plus a review sheet.
-Run one when its data changes — then `enrich_companies.py` to fold the
-result into the workbook.
-
-| Command | Reads | Writes |
-|---|---|---|
-| `python enrich_funding.py` | `sources/formd/` | `cache/funding_formd.json` |
-| `python enrich_sbir.py` | `sources/sbir/award_data.csv` | `cache/funding_sbir.json` |
-| `python fetch_sec_xbrl.py` | SEC API | `sources/xbrl/` |
-| `python enrich_xbrl.py` | `sources/xbrl/` | `cache/rd_xbrl.json` |
-| `python fetch_openalex.py` | OpenAlex API | `sources/openalex/` |
-
-Note the two verbs: **`fetch_*` downloads, `enrich_*` matches.** XBRL needs
-both, because SEC has to be downloaded before it can be matched. Form D and
-SBIR you download by hand, so they only need the matching step.
-
-A typical refresh:
-
-```bash
-python enrich_sbir.py               # after replacing award_data.csv
-python enrich_companies.py          # rebuild — free, everything else is cached
-```
-
-Order does not matter. A cache that does not exist yet leaves its columns
-blank rather than failing, so nothing breaks if you run enrichment first.
-
-Useful options:
-
-```bash
-python match_faculty.py --dry-run             # show what would run, no API spend
-python match_faculty.py --faculty "Ioulia Valla"   # force one faculty, ignore flag
-python enrich_companies.py --skip-geocode     # skip geocoding (testing only)
-python enrich_funding.py --min-year 2023      # ignore older Form D filings
-python enrich_sbir.py --recent-years 3        # narrow the "recent funding" window
-python fetch_sec_xbrl.py --refresh            # refetch instead of reusing the cache
-python fetch_openalex.py --refresh            # same, for OpenAlex
-```
-
-You only need `enrich_companies.py` when the datasource changes or a source
-step has refreshed a cache. Day to day, `match_faculty.py` is the whole
-workflow.
-
-## Which files do I have to manage?
-
-Almost none — the programs look after their own files.
-
-| File | Do you ever touch it? |
-|---|---|
-| `data/input/companies_raw.xlsx` | **Yes** — you replace it when you refresh the Capital IQ extract. Read-only to the programs. |
-| `data/input/Faculty Database.xlsx` | **Yes** — you add faculty rows. The program only writes the Flag cell (`N` → `Y`). |
-| `data/sources/formd/` | **Yes** — you drop each downloaded SEC quarter in here. Nothing else needs changing. |
-| `data/sources/sbir/award_data.csv` | **Yes** — replace the whole file when you refresh it (SBIR updates monthly). |
-| `data/sources/xbrl/` | No — written by `fetch_sec_xbrl.py`. |
-| `data/sources/openalex/` | No — written by `fetch_openalex.py`. |
-| `data/companies_enriched.xlsx` | No — rebuilt and overwritten on every enrichment run. Never needs deleting. |
-| `data/cache/*.json` | No — grows on its own. Delete only to deliberately force re-geocoding or re-scoring. |
-| `data/review/*.xlsx` | Read them — that's their whole purpose. Overwritten on each run. |
-| `data/output/*.xlsx` | Optional — each run writes a new timestamped file, so these accumulate. Tidy up old ones if you like. |
-
-If a file is open in Excel when the program tries to write it, you'll get a
-plain-English message telling you to close it and re-run. Nothing is lost:
-the caches mean the re-run is fast and costs nothing.
-
-## What happens when I re-run enrichment?
-
-| Situation | What happens |
-|---|---|
-| **Same datasource file, run again** | Everything hits the cache — no API calls, no geocoding. The enriched file is rebuilt identically in seconds. Harmless. |
-| **You replaced the file with a new version** | Rebuilt from the new file, paying only for what changed: new companies get geocoded and embedded, changed addresses get re-geocoded, changed descriptions get re-embedded, everything else comes from cache. **Companies no longer in the raw file disappear from the enriched file.** |
-| **You added a new file with a different name** | Nothing — the program reads exactly the path in `config.yaml`, it does not scan the folder. Either rename your new file to `companies_raw.xlsx` or point `paths.companies_raw` at it. Stage 0 prints which file it read, so you can always confirm. |
-
-The enriched file is always a full rebuild, never a merge — so it can never
-drift from the raw datasource or keep stale rows for companies you removed.
-
-Note: partnership and funding scores are cached by *company name*, so they
-survive a datasource refresh even if a description changed. To force those
-to be recomputed, delete `data/cache/company_scores.json`.
+---
 
 ## Configuration
 
-Everything tunable lives in `config.yaml`: file paths, score weights,
-revenue thresholds, candidate-pool size, cutoffs, and model names. No code
-edits needed to retune the system or move it to another machine.
+Everything tunable is in `config.yaml`: paths, Capital IQ header row, AI
+models and concurrency, alignment votes, shortlist sizes, size tiers, tab
+size and order, minimum scores, score weights and component formulas,
+funding and university-track-record settings, faculty-notes lead sources.
+No code changes are needed to retune a run.
 
 ## Tests
 
 ```bash
-python run_tests.py          # 159 tests, ~5 seconds
-python run_tests.py -v       # show each test name
+python run_tests.py          # 546 tests, stubbed AI, no network
+python run_tests.py -v       # each test name
 ```
 
-Safe to run any time: every test builds its own throwaway project in a temp
-folder and uses a stubbed AI client, so it never reads or writes your
-`data/` folder and needs no API key or network connection. Run it after any
-code change.
+Every test builds its own throwaway project, so it never touches `data/`.
+Run it after any code change.
 
-## Notes
+## Saving changes to GitHub
 
-- Interrupted run? Just re-run `match_faculty.py` — completed faculty are
-  already flagged `Y` and are skipped automatically.
-- Each output workbook has a **Run Info** sheet recording the research
-  profile, weights, and settings used, so results are always traceable.
-- Non-git users can get the code via GitHub's **Code → Download ZIP**,
-  then follow the setup above.
+```bash
+cd ~/Downloads/NexusAI
+git status
+git push origin main         # no dot at the end
+```
+
+`git push` succeeded when the last line reads like `abc123..def456  main -> main`.
+If git reports a `.lock` file "File exists", no other git command is
+running, and you did not create it, the lock is left over and can be removed.
+
+## Troubleshooting
+
+| Message | Cause and fix |
+|---|---|
+| `Faculty '…' not found in the database. Names available: Ioulia Valla` | The registration CSV is missing or misnamed — see *Input files*. |
+| `'…' matches more than one faculty … use --row N` | Two people share a first + last name; use `--row`. |
+| `Publications used: none found` in Run Info | No CSV in `data/input/publications/` has a matching `Name`. |
+| `BadZipFile: File is not a zip file` | The export is an `.xls` renamed to `.xlsx` — re-save it as a real `.xlsx`. |
+| `check_export.py` reports a missing or empty column | Add that data item to the Capital IQ screen and export again. |
+| Results show the wrong number of companies | `companies_enriched.xlsx` is another list — re-run `./run_enrich.sh` for the right export. |

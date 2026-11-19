@@ -350,7 +350,7 @@ def main() -> int:
     cache_path = cfg.cache_dir / "funding_formd.json"
     review_path = cfg.review_dir / "funding_formd_review.xlsx"
 
-    print("\n=== NexusAI: Form D funding enrichment ===\n")
+    print("\n=== BridgeAI: Form D funding enrichment ===\n")
     print(f"Reading Form D quarters from: {formd_dir}")
     raw = load_all_formd(formd_dir)
     print(f"\n  {len(raw):,} total filings across all quarters")

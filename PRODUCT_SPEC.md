@@ -1,17 +1,24 @@
-# NexusAI — Product Specification
+# BridgeAI — Product Specification
 
-**Faculty ↔ Industry Matching Pipeline, v2 architecture**
-*University of Connecticut · September 2026*
+**Faculty ↔ Industry Matching Pipeline**
+*University of Connecticut · v2 architecture, updated November 2026*
+
+> BridgeAI was developed under the working name NexusAI; the project folder,
+> GitHub repository and the `nexus/` package keep that name. How to run it
+> is in [README.md](README.md); every output column is defined in
+> [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md).
 
 ---
 
 ## 1. Purpose
 
-NexusAI identifies companies that are strong candidates for research
+BridgeAI identifies companies that are strong candidates for research
 partnerships with UConn faculty. Given a faculty member's research profile
-and a Capital IQ company universe, it produces a ranked, explained top-20
-list of companies per faculty member — scored on research alignment,
-partnership propensity, funding capacity, proximity, and company size.
+and a Capital IQ company list enriched from public datasets, it produces one
+workbook per faculty member with ranked, explained partner lists — top 50
+**Small**, **Mid** and **Large** companies and top 50 **Hospitals &
+Clinics** — scored on research alignment, partnership likelihood, money
+available, proximity and company size.
 
 ## 2. Background: the existing (v1) architecture
 
@@ -45,57 +52,96 @@ drop** workflow:
 ## 3. The v2 architecture
 
 v2 inverts the data flow: instead of one screening file per professor,
-there is **one static company datasource** (a Capital IQ extract, refreshed
-occasionally) and a **Faculty Database** (one row per professor
-with a `Flag` column: `N` = not yet matched, `Y` = matched). The system
-matches every flagged professor against the shared universe.
+there is **one shared company list** per run (a Capital IQ extract, enriched
+once and reused across faculty) and a **faculty source** — the BD-IFR
+registration form export, or the older Faculty Database with a `Flag`
+column.
 
 ### Guiding principle
 
 > **Never pay twice for work that doesn't change between runs.**
 
 Everything that depends only on the *company* is computed once and cached.
-Only work that depends on the *specific professor* runs per matching.
+Only work that depends on the *specific professor* runs per matching — and
+its AI answers are cached too, so a re-run or an interrupted run is cheap.
 
-### 3.1 Stage 0 — Datasource enrichment (`enrich_companies.py`)
+### 3.1 Inputs
 
-Run once per datasource refresh. For every company:
+| Input | Used for |
+|---|---|
+| Capital IQ export (`companies_raw.xlsx`) | The company list. Columns are found by **header name** (any order); `check_export.py` reports a missing or nearly empty column before anything runs. |
+| Registration form (`BDIFR Faculty Registration From-documents.csv`) | The research profile: keywords, research description, nature of research, primary/secondary industry sector, department, industry-interest notes. Contact and identity fields are never read. |
+| Scholarly-contributions CSVs (`data/input/publications/`) | Up to 12 titles, weighted by age and type, are added to the profile; all titles are also searched as their own shortlist query. Only Name, Title, Type and Year are read. |
+| Faculty notes (`data/input/faculty_notes.yaml`, optional) | Per-faculty adjustments: extra research text, named leads, a wider "nearby" distance, publications to ignore (§3.8). |
 
-- Clean the Capital IQ "Offices" block → geocode (Nominatim, ArcGIS
-  fallback) → distance from UConn Storrs (41.8073, −72.2536)
-  — *same logic as ProgramTesting9, carried over unchanged*
-- Parse revenue ($USDmm) and employee counts → deterministic component
-  scores — *same formulas as ProgramTesting9*
-- Compute an **embedding** of the business description — i.e. convert the
-  description text into a numerical "meaning fingerprint" that lets
-  companies be compared to a faculty profile by topic similarity (see
-  §3.3 for the full explanation) — *new in v2; used by the pre-filter*
+**Name matching.** A faculty member is found by full name ignoring accents,
+case and punctuation, then by first + last name (titles such as Dr, Prof and
+a trailing MD ignored; a leading "Md" is part of the name). The same rule
+links a faculty member to their publications. Two people sharing a first and
+last name must be run with `--row`.
 
-The difference from ProgramTesting9 is not the logic but **when it runs**:
-v1 recomputed all of this on every single run; v2 does it once and caches
-the results.
+### 3.2 Stage 0 — Company data (`combine_companies.py`, `enrich_companies.py`)
 
-Outputs `data/companies_enriched.xlsx`. Geocodes and embeddings persist in
-JSON caches (`data/cache/`), so a datasource refresh only pays for new or
-changed companies; failures are cached too so bad addresses aren't
-retried forever.
+Run once per company list (by `./run_enrich.sh`), and again only when the
+export or a source changes.
 
-### 3.2 Stage 1 — Matching run (`match_faculty.py`)
+**Combine** attaches facts from public datasets to each Capital IQ company
+(§5) and computes no scores, so the matching of sources can be checked on
+its own. A company listed twice is kept once only when it is known to be the
+same company (same name and same website, or same ZIP when there is no
+website).
 
-For each faculty row with `Flag = N`:
+**Enrich**, for every company:
 
-| Step | What happens | Why |
-|---|---|---|
-| Build research profile | Research Description + Department + Industry Classifications | Richer context than v1's bare criteria paragraph |
-| **Embedding pre-filter** | Rank all companies by cosine similarity to the profile; keep top 300 (configurable) | Cuts thousands of companies to a relevant pool for ~1 API call; v1 had no equivalent because its input was pre-screened |
-| Alignment scoring | v1's 1–9 rubric prompt, **now including the company's business description** | Small companies judged on what they do, not on model memory of their name |
-| Funnel to top 40 | Preliminary score from distance/employees/revenue/alignment | Secondary scoring spent only where it can affect the top 20 |
-| Partnership + funding scoring | Same prompts as v1, but results are **cached across faculty** (faculty-independent) | "Does company X fund academic research?" has the same answer for every professor — pay once |
-| Final weighted score | 0.25 distance + 0.05 employees + 0.15 revenue + 0.30 alignment + 0.15 partnership + 0.10 funding | Same weights as v1; all configurable |
-| Output | Clean self-contained workbook: a ranked **Top Matches** sheet, an **All Companies** sheet showing every company's scores and the funnel stage it reached (Top 20 / secondary scored / alignment scored / pre-filtered out), plus a **Run Info** sheet (profile, model, weights, date) | Keeps v1's full-list visibility but adds the rank, overall score, and stage labels v1 never wrote to the file |
-| Flag flip | `N → Y` in the Faculty Database | Idempotence + crash recovery + zero extra bookkeeping |
+- **Address → distance.** The Capital IQ "Offices" block is cleaned and
+  geocoded (Nominatim, ArcGIS fallback; cached) → miles from UConn Storrs
+  (41.8073, −72.2536).
+- **Size scores** from revenue and employees (§4).
+- **Funding score** — is there money available *now* (§4), from Form D
+  raises since 2025, SEC cash and R&D, running SBIR/STTR awards and recent
+  university research the company funded.
+- **Academic adjustment** — its track record with universities (past SBIR,
+  clinical-trial and co-authored research partners), added to the AI
+  partnership score at match time.
+- **Company profile.** For companies with SBIR/STTR, ClinicalTrials.gov or
+  OpenAlex text, an AI-written ~150-word profile combining the Capital IQ
+  description with that text (no people's names; cached). Others keep their
+  Capital IQ description.
+- **Embedding** of the profile, for the shortlist (§3.4).
 
-### 3.3 The embedding pre-filter: how cosine similarity works
+Outputs `data/companies_enriched.xlsx`, which carries every source column so
+the evidence behind each score is visible.
+
+### 3.3 Stage 1 — Matching one faculty member (`match_faculty.py`)
+
+| Step | What happens |
+|---|---|
+| **Research profile** | Registration fields + top-weighted publication titles + faculty-notes text. |
+| **Size tiers** | Small: revenue under $100m or unknown. Mid: $100m–$1bn. Large: $1bn and above. Each tier is ranked separately. Companies with status Acquired, Out of Business or Liquidating are left out of every tab. |
+| **Shortlist (Small only)** | Small lists run to tens of thousands, so they are cut by embedding similarity: the **300 companies** closest to the whole profile, plus up to **30 new companies from each separate search** — each keyword, the industry-interests note, the publication titles, the faculty-notes text and each named lead's description. **Hospitals, clinics and practices get separate places** (100 + 10 per search), so they never take a company's place. Mid and Large companies are all scored. `--full` scores every small company instead. |
+| **Alignment (AI)** | Each company is scored 1–9 against the profile from its name **and** its profile text. The rubric judges first *how* the researcher works (methods, tools) and then *what* they study. Each company is asked **three times**; the middle numeric answer counts (NA only if all three are NA). Cached per profile + company text. |
+| **Minimum alignment** | Mid and Large companies need 4 or more to be listed; hospitals and clinics (any tier) need 4 or more. |
+| **Preliminary score** | Distance, employees, revenue and alignment (renormalised weights) rank the scored companies. |
+| **Partnership (AI)** | The top 100 companies and the top 100 providers per tab by preliminary score get a 1–9 partnership-likelihood score. The prompt includes the company's university track record. Cached per company, so shared across faculty. NA counts as neutral (0.5). |
+| **Overall score** | 30% alignment + 25% distance + 15% partnership (+ academic adjustment) + 15% revenue + 10% funding + 5% employees (§4). |
+| **Corporate groups** | A parent and its subsidiaries are listed once, by the best-placed member (within and across tabs); the others show "Same group as … (listed)". Groups come from the parent named in Capital IQ descriptions and from near-identical names; parent names are compared without legal forms (Ltd, AG, SE, plc …), but "Merck KGaA" stays apart from "Merck & Co.". |
+| **Tabs** | Top 50 per size tier, sorted by overall score (`tab_order: overall`; `verdict_first` lists Strong fits first). Hospitals and clinics of every size share one sheet. |
+| **Justifications (AI)** | Every listed company gets 2–3 sentences: the specific overlap, then the practical factors. They start with the verdict, are written *about* the researcher (never "my work"), and are checked automatically: a figure or university name not in our data, or first-person wording, sends the answer back once; if it still fails, a plain data-only justification is used. A company with no website on record gets a "check it still operates" note. |
+| **Output** | `data/output/<Name> Match <date_time>.xlsx` (§3.7). Faculty Database runs flip `Flag` N → Y. |
+
+**Verdicts.** Strong fit (alignment 7–9), Moderate fit (5–6), Weak fit (1–4),
+Fit unclear (NA). The verdict is research fit only; the ranking uses the
+overall score, so a nearby, well-funded Weak fit can rank above a distant
+Strong fit.
+
+**Organisation type.** Each company is labelled Company, Contract
+manufacturer, Hospital / health system or Clinic / care provider from its
+name and description, recomputed at match time so a rule fix needs no
+re-enrichment. Hospitals and clinics go to the Hospitals & Clinics sheet. An
+animal hospital or vet practice is a clinic; a company that sells veterinary
+products is a company.
+
+### 3.4 The embedding shortlist: how cosine similarity works
 
 The pre-filter is the one genuinely new mechanism in v2, so it deserves a
 plain-language explanation.
@@ -124,19 +170,21 @@ keyword filtering remains available as an optional extra layer, not the
 primary mechanism.
 
 Cost and storage: company embeddings are computed once in Stage 0 and
-cached permanently (keyed by a hash of the description text, so an edited
-description automatically re-embeds). Each faculty run costs exactly one
-additional embedding call for the profile. The similarity ranking itself
-is recomputed in memory each run — it is too cheap to be worth storing.
+cached permanently (keyed by a hash of the text embedded, so an edited
+description automatically re-embeds). Each faculty run embeds only its own
+search texts (profile, keywords, notes, publication titles), and those are
+cached too. The similarity ranking itself is recomputed in memory each run —
+it is too cheap to be worth storing.
 
-The pre-filter is deliberately **generous** (top 300 by default) because
-it is the funnel's only lossy step: anything it drops can never be
-recovered downstream. Cheap steps should over-include; expensive steps
+The shortlist is deliberately **generous** (300 companies by the whole
+profile, plus extra places for each separate search — see §3.3) because it
+is the funnel's only lossy step: anything it drops can never be recovered
+downstream. Cheap steps should over-include; expensive steps
 narrow. The cutoff is a config value that can be raised — or set to 0 to
 score the entire datasource. With fewer companies than the cutoff (e.g. a
 61-company test file), the pre-filter simply doesn't activate.
 
-### 3.4 The "NA problem": how v2 scores small companies
+### 3.5 The "NA problem": how v2 scores small companies
 
 v1 asked the LLM to judge companies from their **name alone**, which meant
 the model could only draw on whatever it happened to remember from its
@@ -184,246 +232,215 @@ ranked it only 7th overall because of its distance from Storrs.
 | AI returns something malformed/broken | NA | NA (kept as a safety net) |
 | What NA costs the company | Alignment counts as 0 → sinks in ranking | Same — but now it only happens to genuinely unknowable companies |
 
-The NA escape hatch, strict JSON parsing, and NA → 0 normalization are
-deliberately retained from v1: when there is genuinely nothing to judge,
+Since then the rubric was tightened further: an unrelated company must
+score 1–2, not NA, and with three votes per company (§3.3) a company is NA
+only when every vote is NA. The NA escape hatch, strict JSON parsing, and
+NA → 0 normalization are otherwise deliberately retained from v1: when there is genuinely nothing to judge,
 an honest NA that sinks in the ranking is safer than a hallucinated score.
 The difference is that NA is now the exception (blank-description rows)
 rather than the default outcome for every company the model hadn't
 memorized.
 
-### 3.5 What deliberately carried over from v1
+### 3.6 What deliberately carried over from v1
 
-- The alignment / partnership / funding **prompt rubrics** (proven)
+- The alignment and partnership rubric style (1–9 with NA), tightened since
 - Address cleaning and geocoding chain (Nominatim → ArcGIS)
-- Component score formulas: `exp(−miles/400)` distance decay, employee
-  cap at 1,000, revenue band (1.0 between $30–60mm → 0 at $1B, missing → 0.5)
-- The 40 → 20 funnel shape and the 6-component weighting
+- `exp(−miles/400)` distance decay and the employee cap at 1,000
+- The preliminary → secondary → final funnel and the 6-component weighting
 
-### 3.6 Architecture comparison at a glance
+### 3.7 The output workbook
 
-| | v1 (Watcher + ProgramTesting9) | v2 (NexusAI matching) |
+| Sheet | Contents |
+|---|---|
+| Researcher's leads | Only when the faculty notes name companies (§3.8). |
+| Small - top 50 (pre-filter) | Top 50 small companies. |
+| Mid ($100m-$1bn) - top 50 | Up to 50 mid-size companies (alignment ≥ 4). |
+| Large ($1bn+) - top 50 | Up to 50 large companies (alignment ≥ 4). |
+| Hospitals & Clinics - top 50 | Up to 50 providers of any size (alignment ≥ 4). |
+| All Companies | Every company: scores, the three alignment votes, Stage (how far it got), Found By (which search brought it in). |
+| Run Info | Profile used, publications used, model, votes, company counts per tier, shortlist counts, weights, tab order, faculty notes used. |
+
+### 3.8 Faculty notes
+
+`data/input/faculty_notes.yaml` adjusts one faculty member's run; anyone not
+in it is matched exactly as before (this is tested).
+
+| Field | Effect |
+|---|---|
+| `extra_research` | Added to the research profile and searched on its own at the shortlist ("researcher's notes"). |
+| `distance_full_score_miles` | Full distance score up to N miles; beyond it the usual decay counts from N. |
+| `leads` | Companies the researcher named. The companies *named* like each lead (or, if none, those naming it as their parent) are always AI-scored, shown on the **Researcher's leads** sheet, scored with distance 1.0, and judged with the researcher's note added to their profile. Companies the lead acquired are not treated as the lead. A lead not in the export is taken from the lists under `faculty_notes.lead_sources`. Each lead's description is also searched for similar companies ("like lead: …"). |
+| `ignore_publications` | Titles containing these words are left out. |
+
+### 3.9 Architecture comparison at a glance
+
+| | v1 (Watcher + ProgramTesting9) | v2 (BridgeAI) |
 |---|---|---|
-| Input model | One screening file per professor, dropped manually | Static company universe + faculty database with flags |
-| Trigger | File-system watcher on a dedicated machine | CLI run (watcher/UI can wrap it later) |
-| Geocoding | Every company, every run | Once per company, cached forever |
-| Candidate selection | None (input pre-screened, ~60 companies) | Embedding pre-filter over thousands of companies |
-| LLM context | Company name only | Name + business description |
-| Secondary scores | Recomputed every run | Cached across all faculty runs |
-| Output | Template copy with scattered columns (+ PPT) | Clean per-faculty workbook + Run Info sheet |
-| State tracking | None | Flag column (resume-safe, idempotent) |
-| Configuration | Hardcoded constants, per-OS code forks | Single `config.yaml`, cross-platform (pathlib) |
+| Input model | One screening file per professor, dropped manually | Shared, enriched company list + registration form, publications, notes |
+| Trigger | File-system watcher on a dedicated machine | Command line (`match_faculty.py --faculty` / `--row`) |
+| Geocoding | Every company, every run | Once per address, cached |
+| Candidate selection | None (input pre-screened, ~60 companies) | Embedding shortlist over thousands of small companies; Mid and Large all scored |
+| LLM context | Company name only | Name + description (AI-enriched profile where sources exist) |
+| Alignment | One ask | Three asks, middle answer |
+| Secondary scores | Recomputed every run | Partnership cached across faculty; funding computed from data |
+| Output | Template copy with scattered columns (+ PPT) | Per-faculty workbook: size tabs, providers, leads, All Companies, Run Info |
+| State tracking | None | Caches (resume-safe); Flag column for the Faculty Database |
+| Configuration | Hardcoded constants, per-OS code forks | Single `config.yaml`, cross-platform |
 | Secrets | Hardcoded in source | `.env`, git-ignored |
-| Cost per professor | ~60 geocodes + ~140 LLM calls, all fresh | ~1 embedding + ≤300 alignment calls + cached secondaries; shrinks over time |
 
-## 4. Repository layout
+## 4. Scoring model reference
 
-```
-NexusAI/
-├── config.yaml              # all paths, weights, cutoffs, models
-├── requirements.txt         # pinned dependencies (Python 3.10+)
-├── .env.example             # template for OPENAI_API_KEY (real .env git-ignored)
-│
-├── enrich_companies.py      # Stage 0 — builds companies_enriched.xlsx
-├── enrich_funding.py        # source step — SEC Form D
-├── enrich_sbir.py           # source step — SBIR/STTR awards
-├── fetch_openalex.py        # source step — OpenAlex research record
-├── fetch_sec_xbrl.py        # source step — R&D expense from SEC XBRL
-├── match_faculty.py         # Stage 1 — faculty → ranked companies
-├── run_tests.py             # 137 tests, ~5s, no API key or network needed
-│
-├── nexus/                   # importable core (a future UI reuses this)
-│   ├── settings.py          # config loader
-│   ├── cache.py             # persistent JSON caches
-│   ├── geo.py               # address cleaning, geocoding, distance
-│   ├── matching.py          # company-name matching, shared by every source
-│   ├── scoring.py           # prompts, parsing, component score math
-│   ├── prefilter.py         # embeddings + cosine ranking
-│   └── excel_io.py          # all Excel read/write
-├── tests/
-└── data/                    # git-ignored
-    ├── input/               # files you provide
-    ├── sources/             # downloaded reference data
-    ├── cache/               # things we computed
-    ├── review/              # match-quality workbooks
-    ├── output/              # per-faculty results
-    └── companies_enriched.xlsx
-```
-
-`data/` never reaches GitHub: Capital IQ extracts are licensed and the
-faculty list is internal.
-
-Each folder under `data/` holds one kind of file. The test for where
-something belongs: **if you deleted it, would you re-download it or
-re-compute it?** Downloads go in `sources/`, computed results in `cache/`.
-That split means `cache/` can be wiped for a clean rebuild without losing a
-download, and `sources/` cleared to reclaim disk without losing computed
-work.
-
-### 4.1 Data file lifecycle
-
-| File | Written by | Behaviour |
+| Component | Weight | How it is computed |
 |---|---|---|
-| `input/companies_raw.xlsx` | **You** (Capital IQ extract) | Read-only to the programs. Changes only when you replace it. |
-| `input/Faculty Database.xlsx` | You + `match_faculty.py` | You add rows; the program writes only the Flag cell (`N → Y`). |
-| `sources/*` | **You**, or a fetch script | Downloaded public data. Never edited. |
-| `cache/*.json` | The source steps | Append-only. This is what makes re-runs cheap. |
-| `companies_enriched.xlsx` | `enrich_companies.py` | **Rebuilt from raw + caches every run.** Purely derived, so it can never drift from the datasource. |
-| `review/*.xlsx` | The source steps | Overwritten each run. For checking match quality by eye. |
-| `output/*.xlsx` | `match_faculty.py` | Never overwritten — every run writes a new timestamped file. |
+| Alignment | 30% | AI, 1–9 (middle of 3 votes); min–max normalised across the companies scored in that tab; NA → 0 |
+| Distance | 25% | `exp(−miles/400)`; unknown address → 0. With `distance_full_score_miles: N`: `exp(−max(0, miles−N)/400)`. Named leads: 1.0 |
+| Partnership | 15% | AI, 1–9, normalised across the companies given it; NA → 0.5; then + academic adjustment (bonuses up to +0.15 for past university partners or university research it funded; up to −0.10 for partners on running awards or trials), kept within 0–1 |
+| Revenue | 15% | Size fit: under $5m → 0.2; $5m–$100m → 0.4; **$100m–$1bn → 1.0**; $1bn → $5bn tapering 1.0 → 0.2; above $5bn → 0.2; no figure → 0.5 |
+| Funding | 10% | Money available now, 0–1 from data (no AI): the best of Form D raised since 2025, SEC cash + short-term investments, SEC R&D expense and running SBIR/STTR awards, each on a log scale and aged by its year; funding university research recently → 1.0; no evidence → 0.5 |
+| Employees | 5% | `min(1, employees / 1000)` |
 
-`enrich_companies.py` is needed only when `companies_raw.xlsx` changes, or
-after a source step has refreshed a cache. Running it unnecessarily is
-harmless: it rebuilds identically in seconds, entirely from cache, with no
-API spend.
+The preliminary score uses distance, employees, revenue and alignment only,
+re-weighted to sum to 1. All weights and thresholds are in `config.yaml`.
 
-### 4.2 Company enrichment from public datasets
+## 5. Company enrichment from public datasets
 
 Capital IQ describes companies well but leaves the fields that matter most
-for a partnership decision thin or empty. Revenue is blank for most private
-companies. Employee counts are often missing. Nothing in it says whether a
-company has ever funded academic research, worked with a university, or
-spends anything on R&D.
+for a partnership decision thin or empty: revenue is blank for most private
+companies, and nothing says whether a company has worked with a university,
+funds research or has money to spend. Five public datasets fill those gaps.
 
-So before faculty matching runs, the company dataset is enriched from
-public datasets that fill those gaps. This happens in two parts:
-
-1. **Source steps** — one script per dataset. Each reads its dataset,
-   matches it to our companies, and writes what it found to `data/cache/`.
-   They run independently and on their own schedules.
-2. **Assembly** — `enrich_companies.py` reads the raw datasource plus every
-   cache and rebuilds `companies_enriched.xlsx`. It is the only thing that
-   writes that file.
-
-A source step never writes the enriched workbook, and the workbook is
-always a full rebuild rather than a merge, so it cannot drift from the
-datasource or keep stale rows. If a cache does not exist yet, its columns
-come out blank and nothing breaks — there is no required run order.
-
-#### The datasets
-
-| Dataset | What it covers | What it adds |
+| Dataset | Steps | What it adds |
 |---|---|---|
-| **SEC Form D** | any US company raising private capital, in any sector | dated amounts raised, from the company's own filing |
-| **SBIR/STTR** | federal R&D awards to small businesses, all agencies | dated award amounts, agency, award phase, employee counts, and the university partner named on each STTR award |
-| **SEC XBRL company facts** | reported financials for any public company, whatever the industry | R&D expense — research intensity, which revenue does not show |
-| **OpenAlex** | published research and research funders worldwide | whether a company publishes research or has funded academic work |
+| **SEC Form D** | download quarters → `clean_formd.py` | dated private capital raises |
+| **SBIR/STTR** | download `award_data.csv` → `clean_sbir.py` | federal R&D awards (amounts, running or not), STTR university partners, award titles and abstracts |
+| **SEC XBRL** | `fetch_sec_xbrl.py` → `clean_xbrl.py` | R&D expense, revenue, cash and short-term investments (public companies) |
+| **ClinicalTrials.gov** | `fetch_clinicaltrials.py` → `clean_clinicaltrials.py` | company trials, conditions and treatment types, university partners |
+| **OpenAlex** | `fetch_openalex.py`, `fetch_openalex_ties.py` → `clean_openalex.py` | research topics; universities whose papers it funded or co-wrote (counts only) |
 
-The first three are complementary rather than overlapping. Form D covers
-companies raising private capital; SBIR covers companies the government
-pays to do research — and grant money is not a securities offering, so a
-company living on federal awards files no Form D at all. XBRL covers only
-public companies, which are the ones Capital IQ already describes well, so
-it adds a different signal rather than more coverage.
+`combine_companies.py` joins all of them to the Capital IQ list; a missing
+clean file leaves its columns blank, so there is no required order.
 
 #### Matching companies across sources
 
-Every source joins to the Capital IQ list through `nexus/matching.py`, so
-the rule is written once and improving it improves all of them.
+Every source except XBRL uses one rule (`match_company`):
 
-Names are normalised before comparison — lowercased, punctuation and legal
-suffixes stripped — so the same company spelled several ways collapses to
-one key. An exact match on that key is the starting point, never the
-conclusion: company names are not unique.
+1. **Same name** — identical once case, spacing, punctuation and a leading
+   "The" are ignored, with the same legal form → match. Names of three
+   characters or fewer (acronyms) must also be confirmed.
+2. **Similar name** — the same only once Holdings / Group / International /
+   USA are ignored, or the legal forms differ. A match only if confirmed:
+   both have a website → the websites must agree; otherwise → the ZIP codes
+   must agree.
+3. **Website only** — no name matches, but the website belongs to exactly
+   one company in the source (a rename).
 
-What settles it is the **website**. A domain is a registered identifier a
-company keeps through a relocation and usually through a rename:
+**XBRL** joins by ticker → SEC CIK, an exact identifier, so no name
+comparison is needed.
 
-- website agrees → same company, whatever the address says
-- website disagrees → different companies
-- nothing to compare → the name match stands on its own
+## 6. Repository layout
 
-**A differing address is not evidence.** Sources record the address as at
-the time of the record and never revisit it, so any company that has moved
-will disagree with its own older records. An earlier version rejected
-matches on this and discarded a substantial number of real companies.
+```
+NexusAI/                       (project folder; the product is BridgeAI)
+├── config.yaml                 every path, weight, cutoff and model
+├── requirements.txt, .env.example
+├── check_export.py             check the Capital IQ export's columns
+├── fetch_*.py                  download a public dataset
+├── clean_*.py                  clean a dataset → data/cache/*.csv
+├── combine_companies.py        Capital IQ + sources → companies_combined.xlsx
+├── enrich_companies.py         Stage 0 → companies_enriched.xlsx
+├── run_enrich.sh               combine + enrich in the background (caffeinate)
+├── match_faculty.py            Stage 1 → data/output/<Name> Match ….xlsx
+├── enrich_funding.py, enrich_sbir.py, enrich_xbrl.py   older source path (unused)
+├── export_formd_raw.py, inspect_formd.py               check a Form D figure
+├── run_tests.py                546 tests, stubbed AI, no network
+├── nexus/                      the shared library
+│   ├── settings.py, cache.py, excel_io.py
+│   ├── capitaliq_layout.py     columns found by header name
+│   ├── geo.py, prefilter.py, scoring.py, funding.py
+│   ├── matching.py, groups.py, organisation.py
+│   ├── company_profile.py      AI company profiles
+│   ├── faculty_registration.py, publications.py, faculty_notes.py
+├── tests/
+├── docs/DATA_DICTIONARY.md
+└── data/                       git-ignored (licensed and internal data)
+```
 
-#### What each dataset offers for matching
+### 6.1 Data file lifecycle
 
-Not every dataset carries the same identifying fields, so the same rule
-does different amounts of work depending on the source:
+| File | Written by | Behaviour |
+|---|---|---|
+| `input/*` | **You** | Read-only to the programs (except the Faculty Database Flag cell). |
+| `sources/*` | You, or a `fetch_*` script | Downloaded public data. |
+| `cache/*` | The clean steps and the AI calls | Grows over time; this is what makes re-runs cheap. Delete a file only to force a rebuild. |
+| `companies_combined.xlsx` | `combine_companies.py` | Rebuilt from the raw export + clean files every run. |
+| `companies_enriched.xlsx` | `enrich_companies.py` | Rebuilt every run; can never drift from the export. |
+| `datasets/<name>/` | You | Saved company lists; also where faculty-notes leads are looked up. |
+| `output/*.xlsx` | `match_faculty.py` | Never overwritten — each run writes a new timestamped file. |
 
-| Dataset | Name | Address | Website | How it is matched | Built? |
-|---|---|---|---|---|---|
-| **SEC Form D** | ✓ | ✓ | — | name only, corroborated by state | yes |
-| **SBIR/STTR** | ✓ | ✓ | partly filled | name, falling back to website | yes |
-| **SEC XBRL** | ✓ | — | — | ticker → CIK, an exact identifier | **downloaded only** |
-| **OpenAlex** | ✓ | region only | homepage | name, falling back to website | **not yet** |
+## 7. Known limitations
 
-The script names record this: `enrich_*` scripts match a dataset against
-the datasource and write a cache; `fetch_*` scripts only download. XBRL and
-OpenAlex are currently fetch-only, so their data sits in `data/sources/`
-with nothing joining it to our companies yet.
+### Coverage and the shortlist
 
-Two consequences worth being explicit about:
+- **Companies outside the Capital IQ screen can never be matched.** The
+  industries and regions screened decide who can appear (an ocean-science
+  profile screened only on software and energy services missed offshore
+  wind, ocean sensors and coastal consulting). Capital IQ's Northeast and
+  Midatlantic regions do not include Pennsylvania.
+- **The shortlist is the one lossy step.** A strong company that matches only
+  one part of a profile, or whose description reads like a product catalogue,
+  can rank just outside the 300 + 30-per-search places and is never scored. A
+  larger list (e.g. after adding a region) pushes more such companies out.
+  Raising `extra_per_search` is the lever.
 
-**Form D is matched on name alone.** Its filings carry an address but no
-website, so there is no domain to corroborate a match or to fall back on.
-A company that renamed itself between the filing and the datasource is
-simply a miss there — where in a dataset with websites it would still be
-found. Form D does publish previous-name fields, but those record legal
-rather than business continuity and are deliberately not used (see §6).
+### Scoring
 
-**SEC XBRL will not use this matcher at all.** Public companies carry a
-ticker in the Capital IQ name, and SEC publishes a ticker-to-CIK map, so
-the join is an exact identifier lookup with no name comparison and no
-ambiguity. That is the strongest form of matching available, and it is
-possible only because both sides share a registered identifier — which is
-exactly what private companies lack. The download and the ticker map are in
-place; the join itself is not written yet.
+- **Generic suppliers can be over-scored.** Instrument makers, IT services
+  and compute providers sometimes score high because the researcher *could
+  use* their products, even without interest in the field.
+- **Big companies' descriptions list therapeutic areas or products, not
+  methods**, so large pharma can score low for formulation or methods work;
+  faculty-notes leads with a note are the remedy for companies a researcher
+  names.
+- **Votes that return NA are not cached and are asked again on the next
+  run**, so a company scored on a single vote can move on or off a list
+  between runs.
+- **A short profile** (a few keywords, no publications) makes many companies
+  look alike; publications or `extra_research` sharpen it.
+- With a distance plateau (faculty notes), every company inside the plateau
+  has the same distance score, so many companies tie at the cut-off for
+  partnership scoring.
 
-## 5. Scoring model reference
+### Data quality
 
-- **Alignment (30%)** — LLM, 1–9 rubric against the research profile,
-  min–max normalized across the candidate pool
-- **Distance (25%)** — `exp(−miles/400)`; unknown address → 0
-- **Partnership (15%)** — LLM, 1–9, normalized within the top 40
-- **Revenue (15%)** — band score: 1.0 in $30–60mm, → 0 at $1B, 0.5 if missing
-  *(encodes a deliberate preference for reachable mid-size partners; tunable)*
-- **Funding (10%)** — LLM, 1–9, normalized within the top 40
-- **Employees (5%)** — `min(1, employees/1000)`
-
-All weights and thresholds are `config.yaml` values.
-
-## 6. Known limitations
-
-### Matching companies between datasets
-
-- Matching is exact-after-normalisation, not fuzzy. A misspelling, or a
-  rename with no shared website, is a miss. This is deliberate: a wrong
-  match silently attributes another company's money, which is worse than
-  missing one.
-- A small number of companies cannot be resolved either way — typically
-  very short or initial-based names, where two unrelated companies can
-  plausibly share a name and nothing else is available to separate them.
-  These are excluded from the caches but kept in the review workbooks.
-- Duplicate companies in the datasource — the same firm listed under two
-  names — match the same external record. That is correct, but both rows
-  can appear in one faculty's results.
-- **Address is not used as a fallback**, though it would add matches.
-  Companies cluster in shared incubators and office parks, so a single
-  address routinely hosts many unrelated firms; matching on it would hand a
-  company its neighbours' funding.
-- **Previous-name fields are not used as a fallback**, though Form D
-  provides them. They record legal continuity, not business continuity: a
-  shell company can be taken over and change business entirely while
-  keeping its filing history. Where both the old and new names are in the
-  datasource, following them would attribute one raise to two companies.
+- **Publications exports can contain another researcher's papers** under the
+  same name (seen when Scopus records are merged); check titles and use
+  `ignore_publications`.
+- **Old Capital IQ records** (acquired long ago) can still say "Operating";
+  no website on record is the warning sign, and justifications say so.
+- **The group rule can list a small subsidiary instead of its large parent**
+  (e.g. the subsidiary ranks higher), so the parent appears only in All
+  Companies.
+- **Label gaps.** Some labs and CROs are labelled as clinics and some clinics
+  as companies, which only changes the sheet they appear on.
+- Matching across sources is exact-after-normalisation, not fuzzy: a
+  misspelling or a rename without a shared website is a miss — deliberately,
+  because a wrong match attributes another company's money.
 
 ### What the funding numbers do and do not mean
 
-- **A lifetime total is not spending capacity.** Money awarded decades ago
-  was spent decades ago. The `_recent_usd` columns represent current
-  capacity; the `_total_usd` columns are reference and audit only.
+- **The funding score asks "is there money now?"**, so only current signals
+  count: Form D money raised since 2025, SBIR/STTR awards still running on
+  the day `clean_sbir.py` ran, and the latest SEC cash and R&D figures (aged
+  by their year). Lifetime totals are kept as columns for reference only.
+- **The best single signal counts, not a sum** — a company with both cash in
+  the bank and a recent raise has the same answer twice, not a bigger one.
 - **Most federal award history is old.** Only a minority of matched
-  companies have won an award recently. This data contributes far more to
-  track record than to current capacity.
-- **The combined funding figure mixes two kinds of dollar.** A federal
-  grant is reimbursement for work on a specific project; an equity raise is
-  cash in the bank. The combined number is coarse by nature — acceptable
-  for a low-weighted score, but the per-source columns are what to trust.
-- Award amounts are booked in the year the paperwork lands, not the year
-  the money is spent. Multi-year contracts therefore look lumpy, which is
-  why recency uses a multi-year window rather than the latest year alone.
+  companies have an award running now, so SBIR contributes far more to the
+  university track record than to current money.
+- An R&D figure far too small for a large company's revenue is treated as a
+  different SEC item and left out rather than scored.
+- No evidence is neutral (0.5), never a penalty: a company with no record is
+  not necessarily unfunded.
 
 ### Coverage gaps in the source data
 
@@ -443,9 +460,6 @@ All weights and thresholds are `config.yaml` values.
 - SEC XBRL covers only public companies, which are the ones Capital IQ
   already describes well. It improves the signal on companies already
   known rather than reaching unknown ones.
-- Where the datasource is screened to a single industry, industry-based
-  logic cannot be tuned or tested. The agency-to-industry mapping is built
-  and ready but unexercised until the datasource spans more sectors.
 
 ### Approaches tested and rejected
 
@@ -460,49 +474,23 @@ All weights and thresholds are `config.yaml` values.
   only the most recent year, so companies with long award histories read as
   zero. The per-company API remains a viable option and is unexplored.
 
-### Scoring and pipeline
+## 8. Roadmap
 
-- LLM scores use a single small-model call with no web search; obscure
-  companies may score "NA", which is excluded from normalisation rather
-  than treated as a low score.
-- The embedding pre-filter is the one lossy step: a match invisible in a
-  company's description can be dropped before LLM scoring. Mitigated by a
-  generous cutoff, configurable up to "score everything".
-- Award titles and abstracts are collected but **not** yet used to enrich
-  company descriptions. Doing so would change the text the pre-filter
-  embeds, and therefore which companies reach the LLM for every faculty
-  member — a change to matching behaviour rather than an added column, and
-  it needs its own measurement before being adopted.
-- Geocoding is rate-limited, so the first enrichment of a large datasource
-  takes hours. Once — after that it is cached.
-- Writes fail if the target file is open in Excel; the program says so
-  plainly and the caches make re-running free.
+**Done** — Stage 0 and Stage 1; five public sources cleaned and combined;
+AI company profiles; size tiers and provider sheet; three-vote alignment;
+publications; faculty notes (leads, extra text, distance, ignored titles);
+separate shortlist places for providers; grounded, verdict-first
+justifications.
 
-## 7. Roadmap
+**Options discussed, not built**
 
-**Done** — Stage 0 and Stage 1; Form D, SBIR and SEC XBRL readers; shared
-company matching.
-
-**Next**
-
-1. **Match SEC XBRL** to the datasource by ticker → CIK, writing a cache and
-   a review sheet like the other sources. The data is downloaded but
-   nothing joins it to our companies.
-2. **Match OpenAlex** the same way — also downloaded, also unjoined.
-3. **Join every cache into `companies_enriched.xlsx`** as columns. This is
-   the step that makes any of the enrichment visible to matching.
-4. **Decide how funding feeds the score.** It should probably not be linear
-   in dollars: the revenue component already scores a billion-dollar
-   company at zero, on the view that it is too large to care about a UConn
-   partnership, and funding capacity likely wants the same shape.
-
-**Later**
-
-- Enrich company descriptions from SBIR award titles. Measure the effect on
-  a real faculty's rankings first — it changes the pre-filter, not just a
-  column.
-- Extend the Form D download back beyond 2023.
-- Datasource expansion beyond one industry, which is also what makes the
-  agency-to-industry mapping testable.
-- Windows machine or per-user installs (the code is already
-  cross-platform); a UI wrapping the `nexus/` modules.
+1. Raise the per-search shortlist places from 30 to 60.
+2. Tighten the alignment rubric so generic suppliers (compute, IT services,
+   general lab tools) score at most 4 unless their description shows work in
+   the researcher's field (re-scores all cached alignments).
+3. A "Strong fits outside the top 50" sheet for high-alignment companies that
+   missed a tab on distance or partnership.
+4. Re-ask an alignment until two numeric votes exist.
+5. Cap the "like lead" searches (fewer extra companies per lead).
+6. Leave finance and holding entities off the Researcher's leads sheet.
+7. List a large parent alongside its smaller listed subsidiary.

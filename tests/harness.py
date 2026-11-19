@@ -1,4 +1,4 @@
-"""Test harness: builds a throwaway NexusAI project in a temp directory.
+"""Test harness: builds a throwaway BridgeAI project in a temp directory.
 
 Every test runs against its own isolated copy — its own config.yaml, its own
 data/ folder, its own caches. Nothing here can read or write the real
@@ -191,7 +191,7 @@ class TempProject:
         self.dir = None
 
     def __enter__(self):
-        self.dir = Path(tempfile.mkdtemp(prefix="nexusai_test_"))
+        self.dir = Path(tempfile.mkdtemp(prefix="bridgeai_test_"))
         for sub in ("input", "sources", "cache", "review", "output"):
             (self.dir / "data" / sub).mkdir(parents=True)
         self._write_config()
@@ -322,22 +322,22 @@ class TempProject:
 
     # ---------- runners ----------
     def _run(self, module_name: str, script: str, argv):
-        """Point NEXUSAI_CONFIG at this temp project and run a CLI main()."""
+        """Point BRIDGEAI_CONFIG at this temp project and run a CLI main()."""
         import importlib
         import os
         mod = importlib.import_module(module_name)
-        old_env = os.environ.get("NEXUSAI_CONFIG")
+        old_env = os.environ.get("BRIDGEAI_CONFIG")
         old_argv = sys.argv
-        os.environ["NEXUSAI_CONFIG"] = str(self.dir / "config.yaml")
+        os.environ["BRIDGEAI_CONFIG"] = str(self.dir / "config.yaml")
         sys.argv = [script] + (argv or [])
         try:
             return mod.main()
         finally:
             sys.argv = old_argv
             if old_env is None:
-                os.environ.pop("NEXUSAI_CONFIG", None)
+                os.environ.pop("BRIDGEAI_CONFIG", None)
             else:
-                os.environ["NEXUSAI_CONFIG"] = old_env
+                os.environ["BRIDGEAI_CONFIG"] = old_env
 
     def run_combine(self) -> int:
         """Attach the (here: absent) source files to Capital IQ."""

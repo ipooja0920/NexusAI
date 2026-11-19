@@ -866,7 +866,7 @@ def main() -> int:
     sbir_path = cfg.cache_dir / "sbir_clean.csv"
     out_path = cfg.path("companies_combined", "data/companies_combined.xlsx")
 
-    print("\n=== NexusAI: combine companies + sources ===\n")
+    print("\n=== BridgeAI: combine companies + sources ===\n")
 
     raw, name_col, site_col, addr_col, emp_col = read_raw(cfg)
     raw, dropped = drop_duplicate_companies(raw, name_col, site_col, addr_col)

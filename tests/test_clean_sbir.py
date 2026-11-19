@@ -44,7 +44,7 @@ def award(**over) -> dict:
 
 def run(rows, today=TODAY):
     """Write rows to a temp CSV, clean it, return (awards, company_key)."""
-    d = Path(tempfile.mkdtemp(prefix="nexusai_sbir_"))
+    d = Path(tempfile.mkdtemp(prefix="bridgeai_sbir_"))
     path = d / "award_data.csv"
     pd.DataFrame(rows).to_csv(path, index=False)
     return clean(path, today)

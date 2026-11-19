@@ -6,27 +6,27 @@ with --row (its spreadsheet row; the header is row 1) or --faculty "Name" -
 or, with neither, from the old Faculty Database (every row with Flag = N).
 
 Companies are ranked separately in three size tiers (config size_tiers):
-  Small  under $100m revenue, or revenue unknown (~21,500):
-         tab 1 WITH the pre-filter - embedding similarity -> the closest 300
-         small companies -> AI alignment score;
-         tab 2 WITHOUT it (unless --no-full) - every small company with a
-         description, `openai.concurrency` AI calls at a time
-  Mid    $100m - $1bn (~190): all AI-scored
-  Large  $1bn and above (~80): all AI-scored
-In each tab: preliminary score -> top 40 get the AI partnership score
-(cached across faculty) -> final weighted score -> top 20. Every top-20
-company gets a written justification. One workbook per faculty: a tab per
-tier (and pass), All Companies, Run Info.
+  Small  under $100m revenue, or revenue unknown: a shortlist by embedding
+         similarity - 300 companies + 30 per extra search (keywords,
+         industry interests, publications, faculty notes, leads), with
+         separate places for hospitals/clinics - is AI-scored; --full scores
+         every small company instead
+  Mid    $100m - $1bn: all AI-scored
+  Large  $1bn and above: all AI-scored
+In each tab: preliminary score -> top 100 companies and top 100 providers get
+the AI partnership score (cached across faculty) -> overall score -> top 50.
+Every listed company gets a written justification. One workbook per faculty:
+Researcher's leads (when notes name companies), a tab per tier, Hospitals &
+Clinics, All Companies, Run Info. See PRODUCT_SPEC.md.
 
 Alignment scores are cached (faculty profile x company text), so an
 interrupted run picks up where it stopped and the second pass reuses the
-first pass's 300 scores.
+first pass's scores.
 
 Usage:
     python match_faculty.py --row 13
     python match_faculty.py --faculty "Julie Burland"
     python match_faculty.py --row 13 --sample 200   # cost/speed test first
-    python match_faculty.py --row 13 --no-full      # 300 pre-filter tab only
     python match_faculty.py                         # Faculty Database, Flag = N
     python match_faculty.py --row 13 --dry-run
 """
@@ -1190,7 +1190,7 @@ def main() -> int:
 
     cfg = Settings()
     caches = Caches(cfg.cache_dir)
-    print("\n=== NexusAI Stage 1: Faculty Matching ===\n")
+    print("\n=== BridgeAI Stage 1: Faculty Matching ===\n")
 
     todo, err = pick_faculty(args, cfg)
     if err:

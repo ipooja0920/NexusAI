@@ -1,1 +1,1 @@
-"""NexusAI test suite."""
+"""BridgeAI test suite."""

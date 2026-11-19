@@ -175,7 +175,7 @@ def main() -> int:
     cfg = Settings()
     src = cfg.sources_dir / "xbrl"
     dst = cfg.cache_dir / "xbrl_clean.csv"
-    print(f"\n=== NexusAI: clean SEC XBRL figures ===\n\n  reading {src}")
+    print(f"\n=== BridgeAI: clean SEC XBRL figures ===\n\n  reading {src}")
     out = clean(src)
     dst.parent.mkdir(parents=True, exist_ok=True)
     try:

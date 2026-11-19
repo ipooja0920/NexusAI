@@ -80,7 +80,7 @@ def get(path: str, params: dict, key: str | None, retries: int = 4) -> dict:
     for attempt in range(1, retries + 1):
         try:
             req = urllib.request.Request(url, headers={
-                "User-Agent": f"NexusAI-UConn ({CONTACT})", "Accept": "application/json"})
+                "User-Agent": f"BridgeAI-UConn ({CONTACT})", "Accept": "application/json"})
             with urllib.request.urlopen(req, timeout=60) as r:
                 return json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
@@ -209,7 +209,7 @@ def main() -> int:
     args = ap.parse_args()
     key = api_key()
     this_year = date.today().year
-    print("\n=== NexusAI: OpenAlex research ties ===\n")
+    print("\n=== BridgeAI: OpenAlex research ties ===\n")
     if not key:
         print("  No OPENALEX_API_KEY in .env - OpenAlex requires one (free at openalex.org).")
         return 1

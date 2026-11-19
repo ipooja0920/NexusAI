@@ -201,7 +201,7 @@ def main() -> int:
     cfg = Settings()
     src = cfg.sources_dir / "clinicaltrials"
     dst = cfg.cache_dir / "ctgov_clean.csv"
-    print(f"\n=== NexusAI: clean ClinicalTrials.gov trials ===\n\n  reading {src}")
+    print(f"\n=== BridgeAI: clean ClinicalTrials.gov trials ===\n\n  reading {src}")
     out = clean(src)
     try:
         out.to_csv(dst, index=False, encoding="utf-8")

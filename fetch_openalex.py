@@ -85,7 +85,7 @@ def _get_json(url: str, retries: int = 4) -> dict:
     for attempt in range(1, retries + 1):
         try:
             req = urllib.request.Request(
-                url, headers={"User-Agent": f"NexusAI-UConn ({CONTACT})",
+                url, headers={"User-Agent": f"BridgeAI-UConn ({CONTACT})",
                               "Accept": "application/json"})
             with urllib.request.urlopen(req, timeout=60) as resp:
                 return json.loads(resp.read().decode("utf-8"))
@@ -281,7 +281,7 @@ def main() -> int:
     import os
     api_key = (os.getenv("OPENALEX_API_KEY") or "").strip() or None
 
-    print("\n=== NexusAI: OpenAlex US fetch ===\n")
+    print("\n=== BridgeAI: OpenAlex US fetch ===\n")
     print("Using an API key (daily budget $1)." if api_key else
           "No OPENALEX_API_KEY found - running keyless (budget $0.10/day).\n"
           "  Get one free at openalex.org/settings/api and add it to .env as\n"

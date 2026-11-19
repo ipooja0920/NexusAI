@@ -1,9 +1,9 @@
-# NexusAI — Command Guide
+# BridgeAI — Command Guide
 
 Everything below runs from the project folder:
 
 ```bash
-cd ~/Downloads/NexusAI
+cd ~/Downloads/NexusAI      # the project folder keeps its old name
 ```
 
 ---
@@ -24,7 +24,7 @@ cp .env.example .env
 Check it worked:
 
 ```bash
-python run_tests.py          # 502 tests, ~20 seconds, no API key or network needed
+python run_tests.py          # 546 tests, no API key or network needed
 ```
 
 After this you do **not** need `source venv/bin/activate` for `./run_enrich.sh` —
@@ -37,29 +37,21 @@ it finds the venv itself. You do still need it for the `python …` commands.
 | File | Where | Who provides it |
 |---|---|---|
 | Company export | `data/input/companies_raw.xlsx` | You, from Capital IQ |
-| Faculty list | `data/input/Faculty Database.xlsx` | You |
+| Registration form | `data/input/BDIFR Faculty Registration From-documents.csv` (exact name) | You |
+| Publications (optional) | `data/input/publications/*.csv` | You |
+| Faculty notes (optional) | `data/input/faculty_notes.yaml` | You |
+| Older faculty list | `data/input/Faculty Database.xlsx` | You |
 
 **The company export must be a real `.xlsx`.** Capital IQ hands you an `.xls`.
 Renaming it is not enough — the pipeline uses openpyxl, which only reads true
 `.xlsx`, and a renamed file fails with `BadZipFile: File is not a zip file`.
 Open it in Excel and *Save As → Excel Workbook (.xlsx)*.
 
-**If the column order changed**, update `config.yaml` to match. The config
-addresses fields by letter, so a re-run of the screening report that returns
-the same fields in a different order will silently attach data to the wrong
-field. Check the header row (row 8) against:
+**Columns may come in any order** — they are found by header name on row 8.
+Check the export before going on:
 
-```yaml
-capitaliq:
-  col_company: A
-  col_ticker: B
-  col_industry: C
-  col_company_type: D
-  col_employees: F
-  col_revenue: G
-  col_address: I
-  col_description: K
-  col_website: L
+```bash
+python check_export.py       # every needed column found and filled in?
 ```
 
 ---
@@ -203,9 +195,9 @@ source venv/bin/activate
 # from the BD-IFR registration form (data/input/BDIFR Faculty Registration From-documents.csv)
 python match_faculty.py --row 13 --dry-run          # what it would do, no API spend
 python match_faculty.py --row 13 --sample 200       # test: prints time and tokens per call
-python match_faculty.py --row 13                    # Small (pre-filter), Mid, Large, Hospitals & Clinics + All Companies
+caffeinate -i python match_faculty.py --row 13      # Small (pre-filter), Mid, Large, Hospitals & Clinics + All Companies
 python match_faculty.py --row 13 --full             # Small tab from ALL small companies (~18,000 AI calls, hours)
-python match_faculty.py --faculty "Julie Burland"   # same, by name
+caffeinate -i python match_faculty.py --faculty "Julie Burland"   # same, by name
 
 # old Faculty Database
 python match_faculty.py                             # everyone with Flag = N
@@ -217,7 +209,9 @@ Small (under $100m or revenue unknown), Mid ($100m-$1bn) and Large ($1bn+)
 companies - thresholds in `size_tiers` in config.yaml. The Small - all
 companies pass makes ~20,000 AI calls, `openai.concurrency` (16) at a time. If OpenAI
 reports rate-limit errors, lower `concurrency` in config.yaml. Scores are
-cached, so Ctrl-C and re-run picks up where it stopped.
+cached, so Ctrl-C and re-run picks up where it stopped. `caffeinate -i` keeps
+the Mac awake until the run ends (keep the lid open). Do not use Ctrl-Z - it
+pauses the run; `jobs` then `kill %1` clears it.
 
 ---
 
@@ -243,10 +237,11 @@ eye-checking.
 
 ## Day to day
 
-Once everything is set up, this is the whole loop:
+Once the company list is enriched, this is the whole loop for each faculty
+member:
 
 ```bash
-python match_faculty.py
+caffeinate -i python match_faculty.py --faculty "First Last"
 ```
 
 `./run_enrich.sh` is only needed when the company export changes, or a source
@@ -259,7 +254,8 @@ step has refreshed a cache.
 # 2. check every needed column is there and filled (any order works -
 #    columns are found by header name):
 python check_export.py
-python run_tests.py
+python fetch_openalex_ties.py     # university research ties for the new companies
+python clean_openalex.py
 ./run_enrich.sh
 ```
 

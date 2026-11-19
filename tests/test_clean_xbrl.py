@@ -35,7 +35,7 @@ def frame(tag, ccp, rows, uom="USD"):
 def run(files: dict, tickers: dict | None = None):
     """files: filename -> frame dict. Every file is saved as frames_<name>,
     the only files clean_xbrl.py reads."""
-    root = Path(tempfile.mkdtemp(prefix="nexusai_xbrl_"))
+    root = Path(tempfile.mkdtemp(prefix="bridgeai_xbrl_"))
     for name, f in files.items():
         name = name if name.startswith("frames_") else f"frames_{name}"
         (root / name).write_text(json.dumps(f), encoding="utf-8")

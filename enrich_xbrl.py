@@ -237,7 +237,7 @@ def main() -> int:
     cache_path = cfg.cache_dir / "rd_xbrl.json"
     review_path = cfg.review_dir / "rd_xbrl_review.xlsx"
 
-    print("\n=== NexusAI: SEC XBRL R&D expense ===\n")
+    print("\n=== BridgeAI: SEC XBRL R&D expense ===\n")
     print(f"Reading from: {source_dir}")
     tickers = load_ticker_map(source_dir)
     rd, files = load_rd(source_dir)

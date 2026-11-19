@@ -1,5 +1,5 @@
 # =====================================================================
-# NexusAI Faculty-Company Matching - Configuration
+# BridgeAI Faculty-Company Matching - Configuration
 # All paths are relative to this project folder unless absolute.
 # =====================================================================
 
@@ -246,5 +246,5 @@ academic:
 # --------- Geocoding -------------------------------------------------
 geocoding:
   reference_point: [41.8073, -72.2536]   # UConn Storrs
-  nominatim_user_agent: "NexusAI-UConn-Matching/1.0"
+  nominatim_user_agent: "BridgeAI-UConn-Matching/1.0"
   rate_limit_seconds: 1.05

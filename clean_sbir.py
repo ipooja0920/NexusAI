@@ -178,7 +178,7 @@ def main() -> int:
         dst = Path(args.out) if args.out else cfg.cache_dir / "sbir_clean.csv"
 
     today = pd.Timestamp(date.today())
-    print(f"\n=== NexusAI: clean SBIR awards ===  (as of {today.date()})\n")
+    print(f"\n=== BridgeAI: clean SBIR awards ===  (as of {today.date()})\n")
     print(f"  reading {src}")
     out, key = clean(src, today)
 

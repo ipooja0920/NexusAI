@@ -83,7 +83,7 @@ class TestCache(unittest.TestCase):
     """load_or_fetch: reuse a saved download only once its period is final."""
 
     def setUp(self):
-        self.dir = Path(tempfile.mkdtemp(prefix="nexusai_fetch_"))
+        self.dir = Path(tempfile.mkdtemp(prefix="bridgeai_fetch_"))
         self.path = self.dir / "frames_cash_CY2026Q2I.json"
         self.calls = []
         self._orig = F._get_json

@@ -72,7 +72,7 @@ XBRL = {
 
 
 def _cache_dir() -> Path:
-    d = Path(tempfile.mkdtemp(prefix="nexusai_funding_"))
+    d = Path(tempfile.mkdtemp(prefix="bridgeai_funding_"))
     (d / "funding_formd.json").write_text(json.dumps(FORMD))
     (d / "funding_sbir.json").write_text(json.dumps(SBIR))
     (d / "rd_xbrl.json").write_text(json.dumps(XBRL))

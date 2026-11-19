@@ -467,7 +467,7 @@ def main() -> int:
     cache_path = cfg.cache_dir / "funding_sbir.json"
     review_path = cfg.review_dir / "funding_sbir_review.xlsx"
 
-    print("\n=== NexusAI: SBIR/STTR award enrichment ===\n")
+    print("\n=== BridgeAI: SBIR/STTR award enrichment ===\n")
     print(f"Reading awards from: {csv_path}")
     acc, rows, skipped = aggregate_awards(csv_path)
     print(f"  {rows:,} awards read")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the NexusAI test suite.
+"""Run the BridgeAI test suite.
 
     python run_tests.py           # run everything
     python run_tests.py -v        # show each test name
@@ -53,7 +53,7 @@ def main() -> int:
     verbose = "-v" in sys.argv or "--verbose" in sys.argv
 
     print("\n" + "=" * 62)
-    print("  NexusAI test suite")
+    print("  BridgeAI test suite")
     print("  (isolated temp projects, stubbed AI, no API key needed)")
     print("=" * 62)
 

@@ -207,7 +207,7 @@ def main() -> int:
     formd_dir = Path(args.formd_dir) if args.formd_dir else (cfg.sources_dir / "formd")
     out_path = Path(args.out) if args.out else (cfg.review_dir / "formd_raw.csv")
 
-    print("\n=== NexusAI: raw Form D export ===\n")
+    print("\n=== BridgeAI: raw Form D export ===\n")
     raw = load_raw(formd_dir)
     print(f"\n  {len(raw):,} filings loaded, uncleaned")
 

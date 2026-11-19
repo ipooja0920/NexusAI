@@ -43,7 +43,7 @@ def filing(acc, company="Acme Bio, Inc.", **kw) -> dict:
 
 def run(*quarters):
     """Write each list of filings as one quarter folder, then clean."""
-    root = Path(tempfile.mkdtemp(prefix="nexusai_formd_"))
+    root = Path(tempfile.mkdtemp(prefix="bridgeai_formd_"))
     for qi, filings in enumerate(quarters):
         q = root / f"2025Q{qi + 1}_d"
         q.mkdir()

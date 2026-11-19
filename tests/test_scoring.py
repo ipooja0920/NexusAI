@@ -214,7 +214,7 @@ class TestCacheOnlyWritesWhenChanged(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from nexus.cache import JsonCache
-        d = Path(tempfile.mkdtemp(prefix="nexusai_cache_"))
+        d = Path(tempfile.mkdtemp(prefix="bridgeai_cache_"))
         return JsonCache(d / "c.json")
 
     def test_a_clean_cache_does_not_rewrite_the_file(self):
