@@ -71,14 +71,15 @@ its AI answers are cached too, so a re-run or an interrupted run is cheap.
 |---|---|
 | Capital IQ export (`companies_raw.xlsx`) | The company list. Columns are found by **header name** (any order); `check_export.py` reports a missing or nearly empty column before anything runs. |
 | Registration form (`BDIFR Faculty Registration From-documents.csv`) | The research profile: keywords, research description, nature of research, primary/secondary industry sector, department, industry-interest notes. Contact and identity fields are never read. |
-| Scholarly-contributions CSVs (`data/input/publications/`) | Up to 12 titles, weighted by age and type, are added to the profile; all titles are also searched as their own shortlist query. Only Name, Title, Type and Year are read. |
+| Scholarly-contributions CSVs (`data/input/publications/`) | Up to 12 titles, weighted by age and type, are added to the profile; all titles are also searched as their own shortlist query. Only Name, Title, Type and Year are used. |
 | Faculty notes (`data/input/faculty_notes.yaml`, optional) | Per-faculty adjustments: extra research text, named leads, a wider "nearby" distance, publications to ignore (§3.8). |
 
 **Name matching.** A faculty member is found by full name ignoring accents,
 case and punctuation, then by first + last name (titles such as Dr, Prof and
 a trailing MD ignored; a leading "Md" is part of the name). The same rule
 links a faculty member to their publications. Two people sharing a first and
-last name must be run with `--row`.
+last name must be run with `--row`: a first + last match that fits two
+people stops the run, and an identical full name listed twice takes the first.
 
 ### 3.2 Stage 0 — Company data (`combine_companies.py`, `enrich_companies.py`)
 
@@ -118,13 +119,13 @@ the evidence behind each score is visible.
 |---|---|
 | **Research profile** | Registration fields + top-weighted publication titles + faculty-notes text. |
 | **Size tiers** | Small: revenue under $100m or unknown. Mid: $100m–$1bn. Large: $1bn and above. Each tier is ranked separately. Companies with status Acquired, Out of Business or Liquidating are left out of every tab. |
-| **Shortlist (Small only)** | Small lists run to tens of thousands, so they are cut by embedding similarity: the **300 companies** closest to the whole profile, plus up to **30 new companies from each separate search** — each keyword, the industry-interests note, the publication titles, the faculty-notes text and each named lead's description. **Hospitals, clinics and practices get separate places** (100 + 10 per search), so they never take a company's place. Mid and Large companies are all scored. `--full` scores every small company instead. |
-| **Alignment (AI)** | Each company is scored 1–9 against the profile from its name **and** its profile text. The rubric judges first *how* the researcher works (methods, tools) and then *what* they study. Each company is asked **three times**; the middle numeric answer counts (NA only if all three are NA). Cached per profile + company text. |
+| **Shortlist (Small only)** | Small lists run to tens of thousands, so they are cut by embedding similarity: the **300 companies** closest to the research description (registration form + faculty-notes text; publications are searched separately), plus up to **30 new companies from each separate search** — each of the first 8 keywords and the industry-interests note (registration-form faculty), the publication titles, the faculty-notes text and each named lead's description. **Hospitals, clinics and practices get separate places** (100 + 10 per search), so they never take a company's place. Mid and Large companies are all scored. `--full` scores every small company instead. |
+| **Alignment (AI)** | Each company is scored 1–9 against the profile from its name **and** its profile text. The rubric judges first *how* the researcher works (methods, tools) and then *what* they study. Each company is asked **three times**; the middle numeric answer counts (NA only if all three are NA). A company left at NA is not listed on any tab (it stays in All Companies). Cached per profile + company text. |
 | **Minimum alignment** | Mid and Large companies need 4 or more to be listed; hospitals and clinics (any tier) need 4 or more. |
 | **Preliminary score** | Distance, employees, revenue and alignment (renormalised weights) rank the scored companies. |
 | **Partnership (AI)** | The top 100 companies and the top 100 providers per tab by preliminary score get a 1–9 partnership-likelihood score. The prompt includes the company's university track record. Cached per company, so shared across faculty. NA counts as neutral (0.5). |
 | **Overall score** | 30% alignment + 25% distance + 15% partnership (+ academic adjustment) + 15% revenue + 10% funding + 5% employees (§4). |
-| **Corporate groups** | A parent and its subsidiaries are listed once, by the best-placed member (within and across tabs); the others show "Same group as … (listed)". Groups come from the parent named in Capital IQ descriptions and from near-identical names; parent names are compared without legal forms (Ltd, AG, SE, plc …), but "Merck KGaA" stays apart from "Merck & Co.". |
+| **Corporate groups** | A parent and its subsidiaries are listed once: within a tab by the highest-ranked member; across the size tabs by the member with the higher alignment score (a tie goes to the larger tier). The others show "Same group as … (listed)". Groups come from the parent named in Capital IQ descriptions and from near-identical names; parent names are compared without legal forms (Ltd, AG, SE, plc …), but "Merck KGaA" stays apart from "Merck & Co.". |
 | **Tabs** | Top 50 per size tier, sorted by overall score (`tab_order: overall`; `verdict_first` lists Strong fits first). Hospitals and clinics of every size share one sheet. |
 | **Justifications (AI)** | Every listed company gets 2–3 sentences: the specific overlap, then the practical factors. They start with the verdict, are written *about* the researcher (never "my work"), and are checked automatically: a figure or university name not in our data, or first-person wording, sends the answer back once; if it still fails, a plain data-only justification is used. A company with no website on record gets a "check it still operates" note. |
 | **Output** | `data/output/<Name> Match <date_time>.xlsx` (§3.7). Faculty Database runs flip `Flag` N → Y. |
@@ -165,9 +166,9 @@ keywords are brittle. A catalysis professor's best match might describe
 itself as "process technology" or "fuel upgrading" without ever using the
 word "catalysis," and a keyword filter would silently drop it. Embeddings
 capture semantic closeness — "pyrolysis" lands near "thermochemical
-conversion" in vector space even with zero shared words. Classification
-keyword filtering remains available as an optional extra layer, not the
-primary mechanism.
+conversion" in vector space even with zero shared words. There is no
+industry or keyword filter: the form's sectors are only compared with
+Capital IQ's industry for the Sector Match column and the justification.
 
 Cost and storage: company embeddings are computed once in Stage 0 and
 cached permanently (keyed by a hash of the text embedded, so an edited
@@ -230,13 +231,14 @@ ranked it only 7th overall because of its distance from Storrs.
 | Company is small but Capital IQ describes it | **NA** (AI doesn't recognize the name) | Real score (AI reads the description) |
 | Capital IQ has no description either (just "-") | NA | NA — *correctly*, since there's truly nothing to judge |
 | AI returns something malformed/broken | NA | NA (kept as a safety net) |
-| What NA costs the company | Alignment counts as 0 → sinks in ranking | Same — but now it only happens to genuinely unknowable companies |
+| What NA costs the company | Alignment counts as 0 → sinks in ranking | Left off every tab (shown only in All Companies) — but now it only happens to genuinely unknowable companies |
 
 Since then the rubric was tightened further: an unrelated company must
 score 1–2, not NA, and with three votes per company (§3.3) a company is NA
-only when every vote is NA. The NA escape hatch, strict JSON parsing, and
-NA → 0 normalization are otherwise deliberately retained from v1: when there is genuinely nothing to judge,
-an honest NA that sinks in the ranking is safer than a hallucinated score.
+only when every vote is NA. The NA escape hatch and strict JSON parsing are otherwise deliberately
+retained from v1, and an NA company is now left off the tabs rather than
+ranked at 0: when there is genuinely nothing to judge, leaving it out is
+safer than a hallucinated score.
 The difference is that NA is now the exception (blank-description rows)
 rather than the default outcome for every company the model hadn't
 memorized.
@@ -252,7 +254,7 @@ memorized.
 
 | Sheet | Contents |
 |---|---|
-| Researcher's leads | Only when the faculty notes name companies (§3.8). |
+| Researcher's leads | Only when a company named in the faculty notes is found (§3.8); sorted by alignment score. |
 | Small - top 50 (pre-filter) | Top 50 small companies. |
 | Mid ($100m-$1bn) - top 50 | Up to 50 mid-size companies (alignment ≥ 4). |
 | Large ($1bn+) - top 50 | Up to 50 large companies (alignment ≥ 4). |
@@ -292,11 +294,11 @@ in it is matched exactly as before (this is tested).
 
 | Component | Weight | How it is computed |
 |---|---|---|
-| Alignment | 30% | AI, 1–9 (middle of 3 votes); min–max normalised across the companies scored in that tab; NA → 0 |
+| Alignment | 30% | AI, 1–9 (middle of 3 votes); min–max normalised across the companies scored in the same size tier (hospitals and clinics on their shared sheet are each scaled within their own tier); an NA company is not listed |
 | Distance | 25% | `exp(−miles/400)`; unknown address → 0. With `distance_full_score_miles: N`: `exp(−max(0, miles−N)/400)`. Named leads: 1.0 |
-| Partnership | 15% | AI, 1–9, normalised across the companies given it; NA → 0.5; then + academic adjustment (bonuses up to +0.15 for past university partners or university research it funded; up to −0.10 for partners on running awards or trials), kept within 0–1 |
+| Partnership | 15% | AI, 1–9, normalised across the companies given it; NA → 0.5; then + academic adjustment (bonuses, together at most +0.15: funded university papers +0.10; past SBIR/STTR or clinical-trial university partner +0.05 each; co-wrote papers with a university +0.05; any SBIR/STTR award +0.03. Penalties, together at most −0.10: university partner on a running award or trial −0.05 each), kept within 0–1 |
 | Revenue | 15% | Size fit: under $5m → 0.2; $5m–$100m → 0.4; **$100m–$1bn → 1.0**; $1bn → $5bn tapering 1.0 → 0.2; above $5bn → 0.2; no figure → 0.5 |
-| Funding | 10% | Money available now, 0–1 from data (no AI): the best of Form D raised since 2025, SEC cash + short-term investments, SEC R&D expense and running SBIR/STTR awards, each on a log scale and aged by its year; funding university research recently → 1.0; no evidence → 0.5 |
+| Funding | 10% | Money available now, 0–1 from data (no AI): the best of Form D raised since 2025, SEC cash + short-term investments, SEC R&D expense and running SBIR/STTR awards, each on a log scale (a figure below the scale's floor scores down to 0) and, above 0.5, aged towards 0.5 by its year; funding university papers since 2025 → 1.0; no evidence → 0.5, or 0.55 for a company under $100m (or of unknown revenue) that raised private money before |
 | Employees | 5% | `min(1, employees / 1000)` |
 
 The preliminary score uses distance, employees, revenue and alignment only,
@@ -334,8 +336,13 @@ Every source except XBRL uses one rule (`match_company`):
 3. **Website only** — no name matches, but the website belongs to exactly
    one company in the source (a rename).
 
+What can confirm a similar name depends on the source: SBIR has websites
+and ZIPs; Form D has only ZIPs; OpenAlex has only websites; ClinicalTrials.gov
+has neither, so only a same name matches. Rule 3 runs for SBIR and OpenAlex.
+
 **XBRL** joins by ticker → SEC CIK, an exact identifier, so no name
-comparison is needed.
+comparison is needed; when the ticker gives nothing, the CIK from the
+company's Form D match is tried.
 
 ## 6. Repository layout
 
@@ -350,7 +357,8 @@ NexusAI/                       (project folder; the product is BridgeAI)
 ├── enrich_companies.py         Stage 0 → companies_enriched.xlsx
 ├── run_enrich.sh               combine + enrich in the background (caffeinate)
 ├── match_faculty.py            Stage 1 → data/output/<Name> Match ….xlsx
-├── enrich_funding.py, enrich_sbir.py, enrich_xbrl.py   older source path (unused)
+├── enrich_funding.py, enrich_sbir.py, enrich_xbrl.py   older source path; not run any
+│                               more, but clean_formd.py uses enrich_funding.py's Form D reader
 ├── export_formd_raw.py, inspect_formd.py               check a Form D figure
 ├── run_tests.py                546 tests, stubbed AI, no network
 ├── nexus/                      the shared library

@@ -302,7 +302,7 @@ def partnership_scores(indices, companies, texts, cfg, caches, client, memo):
 
 
 # ----------------------------------------------------------------------
-# One pass: preliminary score -> top 40 partnership -> final top 20
+# One pass: preliminary score -> top 100 partnership -> final top 50
 # ----------------------------------------------------------------------
 
 PROVIDERS = ("Hospital / health system", "Clinic / care provider")
