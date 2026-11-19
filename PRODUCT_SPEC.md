@@ -110,8 +110,10 @@ website).
   Capital IQ description.
 - **Embedding** of the profile, for the shortlist (§3.4).
 
-Outputs `data/companies_enriched.xlsx`, which carries every source column so
-the evidence behind each score is visible.
+Outputs `data/companies_enriched.xlsx`, which carries the source columns each
+score is computed from, beside the score. The full source detail (award
+titles, abstracts, agencies, trial conditions, how each source was matched)
+stays in `data/companies_combined.xlsx`.
 
 ### 3.3 Stage 1 — Matching one faculty member (`match_faculty.py`)
 
@@ -439,7 +441,9 @@ NexusAI/                       (project folder; the product is BridgeAI)
 - **The funding score asks "is there money now?"**, so only current signals
   count: Form D money raised since 2025, SBIR/STTR awards still running on
   the day `clean_sbir.py` ran, and the latest SEC cash and R&D figures (aged
-  by their year). Lifetime totals are kept as columns for reference only.
+  by their year). Older money is kept only as yes/no (raised
+  private money before; ever had an SBIR/STTR award) - there are no lifetime
+  dollar totals.
 - **The best single signal counts, not a sum** — a company with both cash in
   the bank and a recent raise has the same answer twice, not a bigger one.
 - **Most federal award history is old.** Only a minority of matched
